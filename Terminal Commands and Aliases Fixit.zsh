@@ -48,26 +48,28 @@ _fx_looks_like_nl() {
   return 0
 }
 
-# print -z from command_not_found_handler is discarded before the next prompt.
-# Stash the suggestion and inject it when the line editor starts (line-init).
-_FX_PUSH=""
-_fx_pretype() { _FX_PUSH="$1" }
-_fx_line_init() {
-  [[ -n "$_FX_PUSH" ]] || return 0
-  BUFFER="$_FX_PUSH"
-  CURSOR=${#BUFFER}
-  _FX_PUSH=""
-  zle -R
+# Offer a suggestion in an editable inline prompt (vared). Works from
+# command_not_found_handler — unlike print -z / ZLE line-init, which get dropped.
+# Enter = run, edit then Enter = run edited, Ctrl-C / empty = cancel.
+_fx_confirm_run() {
+  local cmd="$1"
+  [[ -z "$cmd" ]] && return 1
+  print -u2 -P "%F{cyan}→ edit & Enter to run, Ctrl-C to cancel%f"
+  # Read from the real tty — command_not_found_handler can leave stdin unusable for ZLE
+  vared -p "$(print -P '%F{cyan}%B$%b%f ')" cmd </dev/tty || return 1
+  [[ -z "${cmd// /}" ]] && return 1
+  eval "$cmd"
 }
 
 command_not_found_handler() {
   local cmd="$1"; shift
   local full="$cmd${@:+ $*}"
-  local out d best
+  local out d best rc
 
   # Natural language ("list all files") → AI, don't fuzzy-match the first word
   if _fx_looks_like_nl "$@"; then
-    _fx_ai_resolve "$full" || print -u2 -P "%F{red}? no match (set OPENROUTER_API_KEY for AI)%f"
+    _fx_ai_resolve "$full" && return $?
+    print -u2 -P "%F{red}? no match (set OPENROUTER_API_KEY for AI)%f"
     return 127
   fi
 
@@ -76,20 +78,22 @@ command_not_found_handler() {
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
     if (( ${_FX_DANGEROUS[(Ie)$best]} )); then
       print -u2 -P "%F{yellow}? '$cmd' not found — closest: $best (not auto-running)%f"
-      _fx_pretype "$best${@:+ $*}"
+      _fx_confirm_run "$best${@:+ $*}" && return $?
     else
       print -u2 -P "%F{yellow}↻ $cmd → $best%f"
       if "$best" "$@"; then
         return 0
       fi
       # Fuzzy guess was wrong (e.g. list→lint) — fall back to AI on original line
-      _fx_ai_resolve "$full" || print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
+      _fx_ai_resolve "$full" && return $?
+      print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
     fi
   elif (( $# == 0 )) && [[ -n "$best" && $d -le 2 ]]; then
     print -u2 -P "%F{yellow}? '$cmd' not found — closest: $best%f"
-    _fx_pretype "$best"
+    _fx_confirm_run "$best" && return $?
   else
-    _fx_ai_resolve "$full" || print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
+    _fx_ai_resolve "$full" && return $?
+    print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
   fi
   return 127
 }
@@ -120,17 +124,13 @@ _fx_precmd() {
     fi
   done
 }
-autoload -Uz add-zsh-hook add-zle-hook-widget
+autoload -Uz add-zsh-hook
 add-zsh-hook preexec _fx_preexec
 add-zsh-hook precmd  _fx_precmd
-# line-init runs when the prompt's editor starts — reliable place to pre-fill BUFFER
-zle -N _fx_line_init
-add-zle-hook-widget line-init _fx_line_init
 
 # ================= Stage 2: AI resolver (OpenRouter) =================
 # Needs: export OPENROUTER_API_KEY=sk-or-...
-# Never auto-runs AI output — suggestion is pre-typed at the next prompt;
-# you press Enter to accept, or edit/clear it.
+# AI output is shown in an editable vared prompt — Enter runs, Ctrl-C cancels.
 FX_MODEL=${FX_MODEL:-deepseek/deepseek-v4-flash}
 
 _fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
@@ -171,11 +171,11 @@ except Exception as e:
     sys.stderr.write("AI parse error: "+str(e)+"\n")'
 }
 
-_fx_suggest() {  # print suggestion + pre-type it at the next prompt
+_fx_suggest() {  # show suggestion in editable prompt, run on Enter
   local sug="$1"
   [[ -z "$sug" ]] && { print -u2 -P "%F{red}? AI gave no answer%f"; return 1 }
-  print -u2 -P "%F{cyan}→ $sug%f   (Enter to run, or edit)"
-  _fx_pretype "$sug"
+  print -u2 -P "%F{cyan}→ $sug%f"
+  _fx_confirm_run "$sug"
 }
 
 # hook into the no-local-match branch of the not-found handler
@@ -183,7 +183,6 @@ _fx_ai_resolve() {   # called with the full original line
   [[ -z "$OPENROUTER_API_KEY" ]] && return 1
   print -u2 -P "%F{cyan}…resolving%f"
   _fx_suggest "$(_fx_ai "$@")"
-  return 0   # handled (success or already printed "no answer")
 }
 
 # `fix` — send the last failed command for a corrected version
