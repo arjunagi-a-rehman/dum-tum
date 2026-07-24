@@ -1,0 +1,35 @@
+{
+  "name": "fixit-zsh",
+  "version": "1.0.0",
+  "description": "One-command installer for fixit.zsh — typo + AI shell helper for macOS and Ubuntu",
+  "bin": {
+    "fixit-zsh": "bin/fixit-zsh.js"
+  },
+  "scripts": {
+    "install-fixit": "bash install.sh"
+  },
+  "files": [
+    "bin/",
+    "install.sh",
+    "fixit.zsh",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arjunagi-a-rehman/dum-tum.git"
+  },
+  "keywords": [
+    "zsh",
+    "shell",
+    "typo",
+    "openrouter",
+    "cli",
+    "fixit"
+  ],
+  "author": "arjunagi-a-rehman",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14"
+  },
+  "preferGlobal": true
+}
