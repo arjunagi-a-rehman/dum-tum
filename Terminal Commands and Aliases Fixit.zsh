@@ -48,6 +48,18 @@ _fx_looks_like_nl() {
   return 0
 }
 
+# print -z from command_not_found_handler is discarded before the next prompt.
+# Stash the suggestion and inject it when the line editor starts (line-init).
+_FX_PUSH=""
+_fx_pretype() { _FX_PUSH="$1" }
+_fx_line_init() {
+  [[ -n "$_FX_PUSH" ]] || return 0
+  BUFFER="$_FX_PUSH"
+  CURSOR=${#BUFFER}
+  _FX_PUSH=""
+  zle -R
+}
+
 command_not_found_handler() {
   local cmd="$1"; shift
   local full="$cmd${@:+ $*}"
@@ -64,7 +76,7 @@ command_not_found_handler() {
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
     if (( ${_FX_DANGEROUS[(Ie)$best]} )); then
       print -u2 -P "%F{yellow}? '$cmd' not found — closest: $best (not auto-running)%f"
-      print -z -- "$best $*"
+      _fx_pretype "$best${@:+ $*}"
     else
       print -u2 -P "%F{yellow}↻ $cmd → $best%f"
       if "$best" "$@"; then
@@ -75,7 +87,7 @@ command_not_found_handler() {
     fi
   elif (( $# == 0 )) && [[ -n "$best" && $d -le 2 ]]; then
     print -u2 -P "%F{yellow}? '$cmd' not found — closest: $best%f"
-    print -z -- "$best"
+    _fx_pretype "$best"
   else
     _fx_ai_resolve "$full" || print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
   fi
@@ -108,9 +120,12 @@ _fx_precmd() {
     fi
   done
 }
-autoload -Uz add-zsh-hook
+autoload -Uz add-zsh-hook add-zle-hook-widget
 add-zsh-hook preexec _fx_preexec
 add-zsh-hook precmd  _fx_precmd
+# line-init runs when the prompt's editor starts — reliable place to pre-fill BUFFER
+zle -N _fx_line_init
+add-zle-hook-widget line-init _fx_line_init
 
 # ================= Stage 2: AI resolver (OpenRouter) =================
 # Needs: export OPENROUTER_API_KEY=sk-or-...
@@ -160,7 +175,7 @@ _fx_suggest() {  # print suggestion + pre-type it at the next prompt
   local sug="$1"
   [[ -z "$sug" ]] && { print -u2 -P "%F{red}? AI gave no answer%f"; return 1 }
   print -u2 -P "%F{cyan}→ $sug%f   (Enter to run, or edit)"
-  print -z -- "$sug"
+  _fx_pretype "$sug"
 }
 
 # hook into the no-local-match branch of the not-found handler
