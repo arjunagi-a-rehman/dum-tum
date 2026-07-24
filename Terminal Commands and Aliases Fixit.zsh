@@ -37,9 +37,28 @@ _fx_ok() { (( $1 <= ${3:-1} && $1 * 2 < $2 + 2 )) }  # $1=dist $2=len $3=max dis
 # Never auto-run these — too destructive if the fuzzy match picks wrong.
 _FX_DANGEROUS=(rm rmdir dd kill pkill killall shutdown reboot halt mkfs fdisk diskutil sudo su chmod chown shred)
 
+# True when every arg looks like plain English (not a flag/path/existing file).
+# Used to detect natural-language intent like "list all the files".
+_fx_looks_like_nl() {
+  (( $# == 0 )) && return 1
+  local a
+  for a in "$@"; do
+    [[ "$a" == -* || "$a" == */* || -e "$a" ]] && return 1
+  done
+  return 0
+}
+
 command_not_found_handler() {
   local cmd="$1"; shift
+  local full="$cmd${@:+ $*}"
   local out d best
+
+  # Natural language ("list all files") → AI, don't fuzzy-match the first word
+  if _fx_looks_like_nl "$@"; then
+    _fx_ai_resolve "$full" || print -u2 -P "%F{red}? no match (set OPENROUTER_API_KEY for AI)%f"
+    return 127
+  fi
+
   out=$(print -rl -- ${(k)commands} ${(k)aliases} ${(k)functions} ${(k)builtins} | _fx_best "$cmd")
   d=${out%%$'\t'*}; best=${out#*$'\t'}
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
@@ -48,13 +67,17 @@ command_not_found_handler() {
       print -z -- "$best $*"
     else
       print -u2 -P "%F{yellow}↻ $cmd → $best%f"
-      "$best" "$@"; return $?
+      if "$best" "$@"; then
+        return 0
+      fi
+      # Fuzzy guess was wrong (e.g. list→lint) — fall back to AI on original line
+      _fx_ai_resolve "$full" || print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
     fi
   elif (( $# == 0 )) && [[ -n "$best" && $d -le 2 ]]; then
     print -u2 -P "%F{yellow}? '$cmd' not found — closest: $best%f"
     print -z -- "$best"
   else
-    _fx_ai_resolve "$cmd $@" || print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
+    _fx_ai_resolve "$full" || print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
   fi
   return 127
 }
@@ -115,12 +138,22 @@ print(json.dumps({"model":sys.argv[4],"max_tokens":200,
  {"role":"user","content":sys.argv[1]+"\nMy aliases:\n"+sys.argv[2]+"\nTask/failed input: "+sys.argv[3]}]}))' \
     "$ctx" "$als" "$*" "$FX_MODEL")
   _fx_ai_http "$body" | python3 -c '
-import json,sys
+import json,sys,re
 try:
     r=json.load(sys.stdin)
-    print(r["choices"][0]["message"]["content"].strip().strip("`"))
-except Exception:
-    pass'
+    if "error" in r:
+        sys.stderr.write("AI error: "+str(r["error"].get("message",r["error"]))+"\n")
+        sys.exit(0)
+    t=r["choices"][0]["message"]["content"].strip()
+    t=re.sub(r"^```(?:\w+)?\s*","",t)
+    t=re.sub(r"\s*```$","",t)
+    t=t.strip().strip("`").strip()
+    # keep only the first non-empty, non-comment line (unless DANGER prefix)
+    lines=[ln for ln in t.splitlines() if ln.strip()]
+    if lines:
+        print(lines[0] if not lines[0].startswith("# DANGER:") else "\n".join(lines[:2]))
+except Exception as e:
+    sys.stderr.write("AI parse error: "+str(e)+"\n")'
 }
 
 _fx_suggest() {  # print suggestion + pre-type it at the next prompt
@@ -135,6 +168,7 @@ _fx_ai_resolve() {   # called with the full original line
   [[ -z "$OPENROUTER_API_KEY" ]] && return 1
   print -u2 -P "%F{cyan}…resolving%f"
   _fx_suggest "$(_fx_ai "$@")"
+  return 0   # handled (success or already printed "no answer")
 }
 
 # `fix` — send the last failed command for a corrected version
