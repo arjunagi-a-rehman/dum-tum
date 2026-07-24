@@ -48,17 +48,30 @@ _fx_looks_like_nl() {
   return 0
 }
 
-# Offer a suggestion in an editable inline prompt (vared). Works from
-# command_not_found_handler — unlike print -z / ZLE line-init, which get dropped.
-# Enter = run, edit then Enter = run edited, Ctrl-C / empty = cancel.
+# Confirm/run a suggestion using plain read(1) on /dev/tty.
+# (vared/print -z/ZLE all fail inside command_not_found_handler)
+# Enter = run · e = edit then run · n / Ctrl-C = cancel
 _fx_confirm_run() {
-  local cmd="$1"
+  local cmd="$1" key
   [[ -z "$cmd" ]] && return 1
-  print -u2 -P "%F{cyan}→ edit & Enter to run, Ctrl-C to cancel%f"
-  # Read from the real tty — command_not_found_handler can leave stdin unusable for ZLE
-  vared -p "$(print -P '%F{cyan}%B$%b%f ')" cmd </dev/tty || return 1
-  [[ -z "${cmd// /}" ]] && return 1
-  eval "$cmd"
+  print -u2 -P "%F{cyan}→ $cmd%f"
+  print -u2 -n "$(print -P '%F{cyan}[Enter] run  [e] edit  [n] cancel%f ')"
+  read -r -k 1 key </dev/tty || return 1
+  print -u2
+  case "$key" in
+    $'\n'|$'\r'|'y'|'Y'|'')
+      eval "$cmd"
+      ;;
+    e|E)
+      print -u2 -n "$(print -P '%F{cyan}$%f ')"
+      read -r cmd </dev/tty || return 1
+      [[ -z "${cmd// /}" ]] && return 1
+      eval "$cmd"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 command_not_found_handler() {
@@ -68,9 +81,7 @@ command_not_found_handler() {
 
   # Natural language ("list all files") → AI, don't fuzzy-match the first word
   if _fx_looks_like_nl "$@"; then
-    _fx_ai_resolve "$full" && return $?
-    print -u2 -P "%F{red}? no match (set OPENROUTER_API_KEY for AI)%f"
-    return 127
+    _fx_ai_resolve "$full"; return $?
   fi
 
   out=$(print -rl -- ${(k)commands} ${(k)aliases} ${(k)functions} ${(k)builtins} | _fx_best "$cmd")
@@ -85,15 +96,13 @@ command_not_found_handler() {
         return 0
       fi
       # Fuzzy guess was wrong (e.g. list→lint) — fall back to AI on original line
-      _fx_ai_resolve "$full" && return $?
-      print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
+      _fx_ai_resolve "$full"; return $?
     fi
   elif (( $# == 0 )) && [[ -n "$best" && $d -le 2 ]]; then
     print -u2 -P "%F{yellow}? '$cmd' not found — closest: $best%f"
     _fx_confirm_run "$best" && return $?
   else
-    _fx_ai_resolve "$full" && return $?
-    print -u2 -P "%F{red}? '$cmd' — no match (set OPENROUTER_API_KEY for AI)%f"
+    _fx_ai_resolve "$full"; return $?
   fi
   return 127
 }
@@ -130,11 +139,12 @@ add-zsh-hook precmd  _fx_precmd
 
 # ================= Stage 2: AI resolver (OpenRouter) =================
 # Needs: export OPENROUTER_API_KEY=sk-or-...
-# AI output is shown in an editable vared prompt — Enter runs, Ctrl-C cancels.
+# AI suggestion is confirmed via _fx_confirm_run (Enter / e / n).
 FX_MODEL=${FX_MODEL:-deepseek/deepseek-v4-flash}
 
 _fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
-  curl -sS --max-time 15 https://openrouter.ai/api/v1/chat/completions \
+  curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
+    https://openrouter.ai/api/v1/chat/completions \
     -H "Authorization: Bearer $OPENROUTER_API_KEY" \
     -H "Content-Type: application/json" -d "$1"
 }
@@ -171,18 +181,21 @@ except Exception as e:
     sys.stderr.write("AI parse error: "+str(e)+"\n")'
 }
 
-_fx_suggest() {  # show suggestion in editable prompt, run on Enter
-  local sug="$1"
-  [[ -z "$sug" ]] && { print -u2 -P "%F{red}? AI gave no answer%f"; return 1 }
-  print -u2 -P "%F{cyan}→ $sug%f"
-  _fx_confirm_run "$sug"
-}
-
 # hook into the no-local-match branch of the not-found handler
 _fx_ai_resolve() {   # called with the full original line
-  [[ -z "$OPENROUTER_API_KEY" ]] && return 1
+  if [[ -z "$OPENROUTER_API_KEY" ]]; then
+    print -u2 -P "%F{red}? set OPENROUTER_API_KEY for AI%f"
+    return 127
+  fi
   print -u2 -P "%F{cyan}…resolving%f"
-  _fx_suggest "$(_fx_ai "$@")"
+  local sug
+  sug="$(_fx_ai "$@")"
+  if [[ -z "$sug" ]]; then
+    print -u2 -P "%F{red}? AI gave no answer (timeout/network?)%f"
+    return 127
+  fi
+  _fx_confirm_run "$sug" && return $?
+  return 127
 }
 
 # `fix` — send the last failed command for a corrected version
