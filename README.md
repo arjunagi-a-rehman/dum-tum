@@ -32,13 +32,17 @@ curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/inst
 npx github:arjunagi-a-rehman/dum-tum
 ```
 
-With an API key in one shot:
+With an API key — any of these work:
 
 ```bash
+# as a parameter
 curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- --key "sk-or-v1-YOUR_KEY"
-
-# or
 npx github:arjunagi-a-rehman/dum-tum --key "sk-or-v1-YOUR_KEY"
+npx github:arjunagi-a-rehman/dum-tum --key="sk-or-v1-YOUR_KEY"
+
+# from the environment
+OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY" npx github:arjunagi-a-rehman/dum-tum
+export OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY"   # then just run the installer
 ```
 
 Non-interactive (CI / skip prompts):

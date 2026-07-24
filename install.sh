@@ -45,6 +45,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --key) API_KEY="${2:-}"; shift 2 ;;
+    --key=*) API_KEY="${1#--key=}"; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --help|-h) usage; exit 0 ;;
