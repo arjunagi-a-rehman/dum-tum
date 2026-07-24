@@ -195,33 +195,96 @@ _fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
 _fx_ai() {  # $* = intent or failed command -> prints one suggested command
   local ctx="OS: $(uname -sm); shell: zsh; cwd: $PWD; files here: $(ls -1 2>/dev/null | head -15 | tr '\n' ' ')"
   local als=$(alias 2>/dev/null | head -30)
-  local body=$(python3 -c '
-import json,sys,os
-sys_p=("You translate user intent or broken shell commands into ONE correct "
- "shell command line for their machine. Output ONLY the command, no markdown, "
- "no backticks, no explanation. Use the user\u0027s own aliases when they fit. "
- "If the action is destructive or irreversible, prefix with: # DANGER: ")
-print(json.dumps({"model":sys.argv[4],"max_tokens":200,
- "messages":[{"role":"system","content":sys_p},
- {"role":"user","content":sys.argv[1]+"\nMy aliases:\n"+sys.argv[2]+"\nTask/failed input: "+sys.argv[3]}]}))' \
-    "$ctx" "$als" "$*" "$FX_MODEL")
-  _fx_ai_http "$body" | python3 -c '
-import json,sys,re
+  local intent="$*" body
+  body=$(FX_CTX="$ctx" FX_ALS="$als" FX_INTENT="$intent" FX_MODEL="$FX_MODEL" python3 <<'PY'
+import json, os
+sys_p = (
+    "You translate user intent or broken shell commands into ONE correct "
+    "shell command line for their machine. Reply with ONLY the command on the "
+    "first line — no markdown fences, no backticks, no explanation, no thinking. "
+    "Use the user's own aliases when they fit. "
+    "If the action is destructive or irreversible, prefix with: # DANGER: "
+)
+print(json.dumps({
+    "model": os.environ["FX_MODEL"],
+    "max_tokens": 800,
+    "messages": [
+        {"role": "system", "content": sys_p},
+        {"role": "user", "content": (
+            os.environ["FX_CTX"] + "\nMy aliases:\n" + os.environ["FX_ALS"]
+            + "\nTask/failed input: " + os.environ["FX_INTENT"]
+        )},
+    ],
+}))
+PY
+)
+  # -c gets the script via command substitution; stdin stays as the API response pipe
+  _fx_ai_http "$body" | python3 -c "$(cat <<'PY'
+import json, sys, re
+HEADS = {
+    "find","ls","cd","cat","grep","rg","fd","mdfind","locate","open","git",
+    "npm","brew","echo","pwd","mkdir","cp","mv","rm","head","tail","wc","du",
+    "df","ps","curl","ssh","tar","python","python3","node","docker","sed",
+    "awk","chmod","touch","which","where","type","tree","bat","eza","clear",
+    "gls","mdls","xargs","sort","uniq","zip","unzip","kill","scp","kubectl",
+}
+PROSE = re.compile(
+    r"^(we |i |the |this |output|i.ll |i will|i need|presumably|"
+    r"common |also |but |so |keep |reply |here |just |use )",
+    re.I,
+)
+
+def head_of(s):
+    s = s.strip()
+    if s.startswith("sudo "):
+        s = s[5:].lstrip()
+    return s.split()[0].split("/")[-1] if s else ""
+
+def extract(t):
+    if not t:
+        return ""
+    t = re.sub(r"^```(?:\w+)?\s*", "", t.strip())
+    t = re.sub(r"\s*```$", "", t).strip()
+    for c in reversed(re.findall(r"`([^`\n]+)`", t)):
+        c = c.strip().strip("\"'")
+        if c and not c.startswith("http") and (head_of(c) in HEADS or " " in c):
+            return c
+    lines = [ln.strip().strip("`") for ln in t.splitlines() if ln.strip()]
+    for i, ln in enumerate(lines):
+        if ln.startswith("# DANGER:"):
+            return "\n".join(lines[i:i+2])
+        if ln.startswith("#") or PROSE.match(ln):
+            continue
+        if head_of(ln) in HEADS or (
+            len(ln.split()) >= 2 and re.match(r"^[a-zA-Z0-9_./~+-]+(\s|$)", ln)
+        ):
+            return ln
+    return ""
+
 try:
-    r=json.load(sys.stdin)
+    r = json.load(sys.stdin)
     if "error" in r:
-        sys.stderr.write("AI error: "+str(r["error"].get("message",r["error"]))+"\n")
+        err = r["error"]
+        msg = err.get("message", err) if isinstance(err, dict) else err
+        sys.stderr.write(f"AI error: {msg}\n")
         sys.exit(0)
-    t=r["choices"][0]["message"]["content"].strip()
-    t=re.sub(r"^```(?:\w+)?\s*","",t)
-    t=re.sub(r"\s*```$","",t)
-    t=t.strip().strip("`").strip()
-    # keep only the first non-empty, non-comment line (unless DANGER prefix)
-    lines=[ln for ln in t.splitlines() if ln.strip()]
-    if lines:
-        print(lines[0] if not lines[0].startswith("# DANGER:") else "\n".join(lines[:2]))
+    msg = (r.get("choices") or [{}])[0].get("message") or {}
+    t = msg.get("content")
+    if not (isinstance(t, str) and t.strip()):
+        parts = []
+        if isinstance(msg.get("reasoning"), str):
+            parts.append(msg["reasoning"])
+        for d in (msg.get("reasoning_details") or []):
+            if isinstance(d, dict) and d.get("text"):
+                parts.append(d["text"])
+        t = "\n".join(parts)
+    out = extract(t if isinstance(t, str) else "")
+    if out:
+        print(out)
 except Exception as e:
-    sys.stderr.write("AI parse error: "+str(e)+"\n")'
+    sys.stderr.write(f"AI parse error: {e}\n")
+PY
+)"
 }
 
 # hook into the no-local-match branch of the not-found handler
