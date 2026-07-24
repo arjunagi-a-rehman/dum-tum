@@ -264,7 +264,7 @@ EOF
 }
 
 main() {
-  info "Installing fixit.zsh for $OS_NAME…"
+  info "Installing fixit.zsh for ${OS_NAME}…"
   install_deps
   install_script
   maybe_ask_key
