@@ -1,6 +1,21 @@
-# fixit.zsh
+# dum-tum
+
+> `dum-tum` is the project/repo name. The tool it installs is **fixit.zsh**.
 
 Turn **typos** and **plain English** into real shell commands — on **macOS** and **Ubuntu/Linux**.
+
+## Why this exists (intention)
+
+The terminal is unforgiving: one wrong letter and you get `command not found`. Nobody remembers every flag for `find`, `tar`, `ffmpeg`, or `grep`. And more and more, people just want to type what they *mean* — "list all files", "where is the reno folder" — and have the machine figure out the command.
+
+**dum-tum's goal: make your shell forgiving.**
+
+1. **Typos shouldn't stop you.** `sl`, `gti`, `cat dcoument.txt` — obvious mistakes get fixed instantly, locally, offline.
+2. **English should just work.** Type a sentence, get the right command from AI — but it *never* runs without your explicit Enter.
+3. **Safety first.** Destructive fuzzy matches (`rm`, `dd`, `kill`, …) are never auto-run. AI output always goes through a confirm prompt. Nothing executes behind your back.
+4. **Zero friction to install.** One `curl` or `npx` line on macOS or Ubuntu — no manual rc-file surgery.
+
+In short: the terminal should feel less like an exam and more like a conversation.
 
 | You type | What happens |
 |----------|----------------|
