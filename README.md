@@ -186,7 +186,7 @@ echo 'source "$HOME/.local/share/fixit/fixit.zsh"' >> ~/.zshrc
 | `src/fixit-common.sh` | shared fuzzy + AI core |
 | `src/fixit-ai.py` | AI payload/extract helper |
 | `install.sh` | macOS + Linux installer |
-| `bin/fixit-zsh.js` | `npx` entrypoint |
+| `bin/dum-tum.js` | `npx` entrypoint |
 | `tests/` | `bash tests/run-tests.sh` |
 
 ## License
