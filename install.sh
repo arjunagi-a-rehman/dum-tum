@@ -573,13 +573,17 @@ EOF
 
   if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
     info "Updating existing fixit block in $ZSHRC"
-    local tmp
+    local tmp repl_file
     tmp="$(mktemp)"
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v repl="$block" '
-      $0 == begin { print repl; skip=1; next }
+    repl_file="$(mktemp)"
+    printf '%s\n' "$block" > "$repl_file"
+    # Replace the marker block; insert replacement via file (no multiline -v)
+    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
+      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
     ' "$ZSHRC" > "$tmp"
+    rm -f "$repl_file"
     if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
       printf '\n%s\n' "$block" >> "$tmp"
     fi
@@ -670,11 +674,13 @@ EOF
 )
 
   touch "$ZSHRC"
+  local tmp repl_file
+  tmp="$(mktemp)"
+  repl_file="$(mktemp)"
+  printf '%s\n' "$cleanup" > "$repl_file"
   if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
-    local tmp
-    tmp="$(mktemp)"
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v repl="$cleanup" '
-      $0 == begin { print repl; skip=1; next }
+    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
+      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
     ' "$ZSHRC" > "$tmp"
@@ -689,6 +695,7 @@ EOF
     ok "Added cleanup block to $ZSHRC (clears FX_* on source)"
     removed=1
   fi
+  rm -f "$repl_file"
 
   if [[ -e "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
