@@ -1,321 +1,150 @@
 # dum-tum
 
-> `dum-tum` is the project/repo name. The tool it installs is **fixit.zsh**.
+**The shell fixer with no trigger key.** Just type what you mean and press Enter.
 
-Turn **typos** and **plain English** into real shell commands — on **macOS** and **Ubuntu/Linux**, in **zsh** or **bash**.
+```bash
+$ sl
+# → runs ls
 
-## Why this exists (intention)
+$ where is the reno folder
+…resolving
+→ find . -type d -iname "*reno*"
+[Enter] run  ·  [e] edit  ·  [n] cancel
+```
 
-The terminal is unforgiving: one wrong letter and you get `command not found`. Nobody remembers every flag for `find`, `tar`, `ffmpeg`, or `grep`. And more and more, people just want to type what they *mean* — "list all files", "where is the reno folder" — and have the machine figure out the command.
+No `f`. No `??`. No `sgpt "..."`. No mode switch. You type into your shell the way you already do, and the shell figures out what you meant.
 
-**dum-tum's goal: make your shell forgiving.**
-
-1. **Typos shouldn't stop you.** `sl`, `gti`, `cat dcoument.txt` — obvious mistakes get fixed instantly, locally, offline.
-2. **English should just work.** Type a sentence, get the right command from AI — but it *never* runs without your explicit Enter.
-3. **Safety first.** Only read-only fuzzy matches (`ls`, `cat`, `pwd`, …) auto-run — everything else asks first. AI output always goes through a confirm prompt. Nothing executes behind your back.
-4. **Zero friction to install.** One `curl` or `npx` line on macOS or Ubuntu — no manual rc-file surgery.
-
-In short: the terminal should feel less like an exam and more like a conversation.
-
-| You type | What happens |
-|----------|----------------|
-| `sl` | Auto-runs `ls` |
-| `list all files` | AI suggests `ls -la` → you confirm |
-| `where is reno folder` | AI suggests `find` / `mdfind` → you confirm |
-| `cat dcoument.txt` | Fixes the filename typo (safe commands only) |
-| `fix` | AI-corrects the last failed command |
-
-- **Stage 1** — local fuzzy matching (instant, offline)
-- **Stage 2** — optional AI via **OpenCode**, **Codex CLI**, or [OpenRouter](https://openrouter.ai)  
-  Suggestions are **never auto-run**: **Enter** = run · **e** = edit · **n** = cancel
-
----
-
-## One-line install (easiest)
-
-### macOS or Ubuntu / Debian
-
-**Option A — curl (no Node required)**
+macOS + Linux · zsh + bash · MIT
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 ```
 
-**Option B — npx (if you have Node.js)**
+---
+
+## Why this is different
+
+Every other terminal fixer makes you *ask* for help. That's the friction — you have to notice you're stuck, remember the tool exists, and invoke it.
+
+| Tool | How you invoke it |
+| --- | --- |
+| thefuck | run the command, then type `fuck` |
+| pay-respects | run the command, then press `F` |
+| ShellGPT | `sgpt "list all files"` |
+| ai-shell | `ai list all files` |
+| Copilot CLI | `gh copilot suggest "..."` |
+| **dum-tum** | **you just type. Enter.** |
+
+dum-tum hooks `accept-line` — the moment you press Enter, before your shell rejects anything. Typos get fixed locally and instantly. Plain English gets routed to AI. Everything else runs exactly as it always did.
+
+The second difference: **it doesn't demand another API key.** If you already have `opencode` or `codex` installed and logged in, dum-tum uses them. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
+
+---
+
+## What it does
+
+| You type | What happens |
+| --- | --- |
+| `sl` | auto-runs `ls` — local, offline, instant |
+| `gti status` | close match, but not read-only → **confirms first** |
+| `kil 1234` | **never** auto-runs `kill` — confirm prompt only |
+| `cat dcoument.txt` | fuzzy-matches the filename on safe commands |
+| `list all files` | AI suggests `ls -la` → you confirm |
+| `create a python venv` | AI suggests the command → you confirm |
+| `fix` | AI-corrects whatever just failed |
+
+**Stage 1** is local fuzzy matching: instant, offline, never touches the network.
+**Stage 2** is optional AI, and it *never* auto-runs. Enter to run, `e` to edit, `n` to cancel.
+
+---
+
+## Install
+
+**macOS, Ubuntu, Debian, Fedora, Arch:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
+```
+
+Or with Node:
 
 ```bash
 npx github:arjunagi-a-rehman/dum-tum
 ```
 
-Interactive install flow:
-
-1. Install deps + copy `fixit.zsh`
-2. Detect **OpenCode** / **Codex** on `PATH`
-3. **Select provider** — OpenCode · Codex · OpenRouter key · Skip AI
-4. **Select model** (curated list or custom)
-5. **Smoke-test** the backend
-6. Write `~/.zshrc` · done
-
-Non-interactive examples:
+The installer detects your login shell, installs deps, finds `opencode`/`codex` on your PATH, lets you pick a provider and model, smoke-tests it, and writes your rc file. Then:
 
 ```bash
-# OpenRouter
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- \
-  --yes --provider openrouter --key "sk-or-v1-YOUR_KEY"
-
-# OpenCode or Codex (must already be installed + logged in)
-./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
-./install.sh --yes --provider codex --model o4-mini
-
-# Local typos only
-./install.sh --yes --provider none
-```
-
-Also works with env vars: `FX_PROVIDER`, `FX_MODEL`, `OPENROUTER_API_KEY`.
-
-Then reload:
-
-```bash
-source ~/.zshrc
-# or open a new terminal tab (zsh)
-```
-
-Try:
-
-```bash
+source ~/.zshrc   # or open a new tab
 sl
 list all files
 ```
 
----
-
-## What you need
-
-| Tool | macOS | Ubuntu |
-|------|--------|--------|
-| **zsh** or **bash 4+** | zsh default since Catalina; bash via Homebrew | bash is default; zsh optional |
-| **python3** | `/usr/bin/python3` or Homebrew | `sudo apt install python3` |
-| **curl** | Preinstalled | Preinstalled or `apt install curl` |
-| **AI backend** | Optional — OpenCode, Codex CLI, or OpenRouter key | same |
-
-### Which shell gets configured?
-
-The installer auto-detects your login shell (`$SHELL`):
-
-- login shell is **zsh** → writes `~/.zshrc`
-- login shell is **bash** → writes `~/.bashrc`
-- anything else → configures **both**
-
-Force it with `--shell zsh`, `--shell bash`, or `--shell both`.
-
-### Shell support: zsh and bash
-
-fixit hooks into **zsh** and **bash** (bash 4+).
-
-**macOS** — zsh is the default; bash 3.2 at `/bin/bash` is too old for the Enter-hook, but typo fixing still works. For full bash support use Homebrew bash 5.
-
-**Ubuntu** — bash works out of the box; zsh optional (`sudo apt install zsh`, `chsh -s $(which zsh)`).
+**Non-interactive:**
 
 ```bash
-echo $SHELL    # /bin/zsh or /bin/bash both fine
-```
-
-AI backends (pick one at install, or set later):
-
-| Provider | Needs |
-|----------|--------|
-| **OpenCode** | `opencode` on `PATH`, already authenticated |
-| **Codex CLI** | `codex` on `PATH`, already authenticated |
-| **OpenRouter** | API key from [openrouter.ai/keys](https://openrouter.ai/keys) |
-| **none** | Local typo fixes only |
-
----
-
-## Platform notes
-
-### macOS
-
-- Works in Terminal.app, iTerm2, Ghostty, Warp, etc.
-- If `python3` is missing: `xcode-select --install` or `brew install python`
-- If the installer needs packages and Homebrew exists, it uses `brew install`
-
-### Ubuntu / Debian / Pop!_OS / Mint
-
-```bash
-# Manual deps (only if you skip the installer)
-sudo apt update
-sudo apt install -y zsh python3 curl
-
-# Install fixit
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
-
-# Make zsh your login shell (recommended)
-chsh -s $(which zsh)
-```
-
-Then open a new terminal session (or reboot once) so the login shell switches.
-
-Other distros:
-
-| Distro | Deps |
-|--------|------|
-| Fedora | `sudo dnf install zsh python3 curl` |
-| Arch | `sudo pacman -S zsh python curl` |
-
-The installer tries `apt`, then `dnf`, then `pacman` automatically.
-
----
-
-## Installer CLI reference
-
-```bash
-./install.sh --help
-
-./install.sh --provider openrouter --key sk-or-v1-...
-./install.sh --provider opencode --model anthropic/claude-sonnet-4
-./install.sh --provider codex --model gpt-5.6-luna --variant low
-./install.sh --provider none
-./install.sh --yes                  # less prompting
-./install.sh --skip-deps            # do not apt/brew install
-./install.sh --skip-ai-test         # skip smoke test
-./install.sh --uninstall            # remove fixit from this machine
-```
-
-| Env var | Meaning |
-|---------|---------|
-| `FX_PROVIDER` | `openrouter` · `opencode` · `codex` · `none` |
-| `FX_MODEL` | Model id (provider-specific) |
-| `OPENROUTER_API_KEY` | Same as `--key` (OpenRouter only) |
-| `FIXIT_HOME` | Install directory (default `~/.local/share/fixit`) |
-| `FIXIT_RAW` | Override raw GitHub base URL |
-
-**Uninstall**
-
-```bash
-# npx
-npx github:arjunagi-a-rehman/dum-tum --uninstall
-
-# curl
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- --uninstall
-
-# local clone
+./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
+./install.sh --yes --provider openrouter --key sk-or-v1-...
+./install.sh --yes --provider none          # local typo fixing only
 ./install.sh --uninstall
 ```
 
-Then finish in that shell:
-
-```bash
-source ~/.zshrc
-```
-
-This removes `~/.local/share/fixit`, replaces the managed zshrc block with a tiny cleanup that **unsets** `FX_PROVIDER` / `FX_MODEL` / `OPENROUTER_API_KEY` (so leftovers from the current session are cleared), and drops the shell hook. Re-install overwrites that cleanup block.
+Requires zsh or bash 4+, `python3`, and `curl`. On macOS, `/bin/bash` 3.2 is too old for the Enter-hook — typo fixing still works, or install Homebrew bash 5 for the full experience.
 
 ---
 
-## Manual install (no installer)
+## Safety
 
-```bash
-git clone https://github.com/arjunagi-a-rehman/dum-tum.git
-cd dum-tum
-mkdir -p ~/.local/share/fixit
-cp src/fixit.zsh src/fixit.bash src/fixit-common.sh src/fixit-ai.py ~/.local/share/fixit/
-```
+This tool runs things in your shell. That deserves a straight answer about what it will and won't do.
 
-Add to `~/.zshrc` (or `~/.bashrc` with `fixit.bash`):
+- **Only read-only commands auto-run.** `ls`, `cat`, `pwd` and friends. Everything else asks.
+- **AI output never auto-runs.** Ever. It always waits for Enter.
+- **Failed-command auto-fix asks before sending.** When a broken `git`/`npm`/`docker` command would go to AI, you get `Send this failed command? [y/N]` first. Nothing is transmitted silently.
+- **Secrets are redacted** before anything leaves the machine — `--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`.
+- **Local mode is fully offline.** Nothing leaves your machine, period.
+- **Keys don't hit the process table.** The OpenRouter key and request body go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
 
-```zsh
-source "$HOME/.local/share/fixit/fixit.zsh"
-export FX_PROVIDER="openrouter"   # or opencode | codex | none
-export FX_MODEL="deepseek/deepseek-v4-flash"
-export OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY"   # openrouter only
-```
+One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call.
 
-```bash
-source ~/.zshrc
-```
-
----
-
-## Usage
-
-### Local typos (offline)
-
-| Typed | Result |
-|-------|--------|
-| `sl` | runs `ls` |
-| `gti status` | close match — **confirms first** (not on the read-only allowlist) |
-| `kil 1234` | **won’t** auto-run `kill` — confirm prompt only |
-
-### Natural language (AI provider required)
-
-```text
-list all files
-show large files here
-where is reno folder
-create a python venv
-```
-
-```text
-…resolving
-→ ls -la
-[Enter] run  [e] edit  [n] cancel
-```
-
-### Filename typos on safe commands
-
-`cd`, `cat`, `ls`, `head`, `bat`, … — fuzzy-matches paths under `.` (depth 2).
-
-### After any failure
-
-```bash
-grep foo /bad/path
-fix
-```
+What AI mode sends: OS and shell, cwd, ~15 filenames, sample aliases, and what you typed. Don't paste secrets into natural-language prompts.
 
 ---
 
 ## Configuration
 
 | Variable | Default | Purpose |
-|----------|---------|---------|
+| --- | --- | --- |
 | `FX_PROVIDER` | `openrouter` | `openrouter` · `opencode` · `codex` · `none` |
-| `FX_MODEL` | provider default | Model id (`deepseek/deepseek-v4-flash` if OpenRouter + unset) |
-| `FX_VARIANT` | model default | Reasoning effort (codex/opencode: `low` · `medium` · `high` · …) |
-| `FX_AI_TIMEOUT` | `90` | Seconds before a CLI backend call is killed |
-| `OPENROUTER_API_KEY` | empty | Required when `FX_PROVIDER=openrouter` |
-| `FX_AI_ON_FAIL` | `1` | Ask AI to fix failed multi-command tools (`go`, `git`, `npm`, `docker`, …) |
+| `FX_MODEL` | provider default | model id |
+| `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
+| `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call is killed |
+| `FX_AI_ON_FAIL` | `1` | ask AI to fix failed `go`/`git`/`npm`/`docker` commands |
+| `OPENROUTER_API_KEY` | — | required only for OpenRouter |
+| `FIXIT_HOME` | `~/.local/share/fixit` | install directory |
 
-```zsh
+```bash
 export FX_PROVIDER="opencode"
 export FX_MODEL="anthropic/claude-sonnet-4"
-
-# or OpenRouter:
-export FX_PROVIDER="openrouter"
-export OPENROUTER_API_KEY="sk-or-v1-..."
-export FX_MODEL="deepseek/deepseek-v4-flash"
 ```
-
-Models: [openrouter.ai/models](https://openrouter.ai/models) · `opencode models` · Codex `-m` ids
 
 ---
 
 ## How it works
 
-```text
+```
 Enter pressed
     │
-    ├─ English sentence?  (accept-line)  → AI → confirm
+    ├─ English sentence?           → AI → confirm
     │
     ├─ Unknown command?
-    │     multi-word English             → AI
-    │     close typo + read-only cmd     → auto-run
-    │     close typo + anything else     → confirm only
-    │     else                           → AI
+    │     multi-word English       → AI → confirm
+    │     close typo + read-only   → auto-run
+    │     close typo + anything    → confirm only
+    │     else                     → AI → confirm
     │
     └─ Known command failed?
-          typo’d file arg on safe cmd    → fix path + re-run
-          multi-tool usage error
-          (go to desktop, git psuh, …)   → confirm send → AI → confirm
+          typo'd file arg (safe)   → fix path + re-run
+          multi-tool usage error   → ask → AI → confirm
 ```
 
 ---
@@ -323,84 +152,43 @@ Enter pressed
 ## Troubleshooting
 
 | Symptom | Fix |
-|---------|-----|
-| Installer can’t find `zsh` on Ubuntu | `sudo apt install zsh` then re-run; `chsh -s $(which zsh)` |
-| Commands do nothing in bash | You’re not in zsh — run `zsh` or change login shell |
-| Old behavior after update | Re-run installer or `source ~/.zshrc` |
-| `…resolving` then timeout | Network/VPN; check provider auth; try another `FX_MODEL` |
-| `where is …` runs builtin `where` | Update to latest `fixit.zsh` (has accept-line hook) |
-| `OPENROUTER_API_KEY` empty | Only needed for OpenRouter — set in fixit block or switch `FX_PROVIDER` |
-| `opencode/codex not found` | Install CLI + ensure it’s on `PATH`, or use OpenRouter |
-| Permission denied on install.sh | `chmod +x install.sh` or run via `bash install.sh` |
+| --- | --- |
+| Nothing happens in bash | bash 3.2 is too old — `brew install bash`, or use zsh |
+| `where is …` runs builtin `where` | update to latest — needs the accept-line hook |
+| `…resolving` then timeout | check network/VPN and provider auth; try another `FX_MODEL` |
+| Old behavior after update | `source ~/.zshrc` or re-run the installer |
+| `opencode`/`codex` not found | install the CLI and ensure it's on `PATH`, or switch to OpenRouter |
 
-Test deps:
+Quick diagnostic:
 
 ```bash
-echo $SHELL
-zsh --version
-python3 --version
-curl --version
-echo $FX_PROVIDER $FX_MODEL
-echo ${OPENROUTER_API_KEY:0:12}
+echo $SHELL; python3 --version; echo $FX_PROVIDER $FX_MODEL
 command -v opencode; command -v codex
-whence -w command_not_found_handler   # run inside zsh after source
+whence -w command_not_found_handler
 ```
 
 ---
 
-## Privacy & safety
+## Manual install
 
-- **Local mode** never leaves your machine.
-- **AI mode** sends a short prompt (OS/shell, cwd, ~15 filenames, sample aliases, typed text) to your chosen backend (OpenRouter API, or local OpenCode/Codex which use their own auth/providers).
-- **Secret guard.** Failed-command auto-fix never transmits a line that looks like it contains a credential (`--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`) — it’s skipped with a warning instead. The same shapes are also masked (`[REDACTED]`) before any other payload leaves the machine.
-- Only read-only fuzzy matches auto-run; AI suggestions never execute without you pressing **Enter**.
-- **Key handling.** The OpenRouter key and request body travel to `curl` via stdin/tempfile, not the command line (so they don’t show up in `ps`). The installer sets your rc file to `chmod 600` after writing the key. With `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` while that call runs.
-- Keep API keys out of git. If a key leaked, rotate it at [openrouter.ai/keys](https://openrouter.ai/keys).
-
----
+```bash
+git clone https://github.com/arjunagi-a-rehman/dum-tum.git
+mkdir -p ~/.local/share/fixit
+cp dum-tum/src/* ~/.local/share/fixit/
+echo 'source "$HOME/.local/share/fixit/fixit.zsh"' >> ~/.zshrc
+```
 
 ## Repo layout
 
 | Path | Role |
-|------|------|
-| `src/fixit.zsh` | zsh adapter (hooks) |
-| `src/fixit.bash` | bash adapter (hooks) |
+| --- | --- |
+| `src/fixit.zsh` · `src/fixit.bash` | shell adapters (hooks) |
 | `src/fixit-common.sh` | shared fuzzy + AI core |
 | `src/fixit-ai.py` | AI payload/extract helper |
-| `install.sh` | macOS + Ubuntu installer |
+| `install.sh` | macOS + Linux installer |
 | `bin/fixit-zsh.js` | `npx` entrypoint |
-| `tests/` | unit tests + shell checks (`npm test` or `bash tests/run-tests.sh`) |
-| `package.json` | npm / npx metadata |
-| `README.md` | This file |
-
-## Development
-
-```bash
-bash tests/run-tests.sh   # python unit tests + bash/zsh syntax + shellcheck
-```
-
----
-
-## Publish to npm (optional)
-
-So people can run `npx fixit-zsh` without the `github:` prefix:
-
-```bash
-cd dum-tum
-npm login
-npm publish --access public
-```
-
-Until then, prefer:
-
-```bash
-npx github:arjunagi-a-rehman/dum-tum
-# or
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
-```
-
----
+| `tests/` | `bash tests/run-tests.sh` |
 
 ## License
 
-MIT — use and modify freely on your machines.
+MIT. Use it, fork it, break it.
