@@ -6,6 +6,7 @@
 #   ./install.sh
 #   ./install.sh --key sk-or-v1-...
 #   ./install.sh --provider opencode --model anthropic/claude-sonnet-4
+#   ./install.sh --uninstall
 set -euo pipefail
 
 REPO_RAW="${FIXIT_RAW:-https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main}"
@@ -24,6 +25,7 @@ MODEL="${FX_MODEL:-}"
 ASSUME_YES=0
 SKIP_DEPS=0
 SKIP_AI_TEST=0
+DO_UNINSTALL=0
 
 HAVE_OPENCODE=0
 HAVE_CODEX=0
@@ -34,6 +36,7 @@ fixit.zsh installer (macOS + Ubuntu/Linux)
 
 Usage:
   ./install.sh [options]
+  ./install.sh --uninstall
 
 Options:
   --provider NAME   openrouter | opencode | codex | none
@@ -42,6 +45,7 @@ Options:
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
   --skip-ai-test    Skip the post-setup AI smoke test
+  --uninstall       Remove fixit.zsh and its ~/.zshrc block
   --help, -h        Show this help
 
 Env:
@@ -64,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --yes|-y) ASSUME_YES=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --skip-ai-test) SKIP_AI_TEST=1; shift ;;
+    --uninstall|uninstall) DO_UNINSTALL=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
@@ -590,7 +595,49 @@ Docs: https://github.com/arjunagi-a-rehman/dum-tum
 EOF
 }
 
+uninstall_fixit() {
+  info "Uninstalling fixit.zsh…"
+  local removed=0
+
+  if [[ -f "$ZSHRC" ]] && grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
+    local tmp
+    tmp="$(mktemp)"
+    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
+      $0 == begin { skip=1; next }
+      $0 == end   { skip=0; next }
+      !skip       { print }
+    ' "$ZSHRC" > "$tmp"
+    mv "$tmp" "$ZSHRC"
+    ok "Removed fixit block from $ZSHRC"
+    removed=1
+  else
+    warn "No fixit block found in $ZSHRC"
+  fi
+
+  if [[ -e "$INSTALL_DIR" ]]; then
+    rm -rf "$INSTALL_DIR"
+    ok "Removed $INSTALL_DIR"
+    removed=1
+  else
+    warn "Install dir not found: $INSTALL_DIR"
+  fi
+
+  if [[ "$removed" -eq 0 ]]; then
+    warn "Nothing to uninstall."
+  else
+    ok "fixit.zsh uninstalled"
+    echo ""
+    echo "Reload your shell:  source $ZSHRC"
+    echo "Or open a new terminal tab."
+  fi
+}
+
 main() {
+  if [[ "$DO_UNINSTALL" -eq 1 ]]; then
+    uninstall_fixit
+    return 0
+  fi
+
   info "Installing fixit.zsh for ${OS_NAME}…"
   install_deps
   install_script

@@ -5,6 +5,7 @@
  *   npx fixit-zsh          (after published to npm)
  *   npx fixit-zsh --key sk-or-v1-...
  *   npx fixit-zsh --provider opencode --model anthropic/claude-sonnet-4
+ *   npx fixit-zsh --uninstall
  */
 const { spawnSync } = require("child_process");
 const fs = require("fs");

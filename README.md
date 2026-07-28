@@ -174,6 +174,7 @@ The installer tries `apt`, then `dnf`, then `pacman` automatically.
 ./install.sh --yes                  # less prompting
 ./install.sh --skip-deps            # do not apt/brew install
 ./install.sh --skip-ai-test         # skip smoke test
+./install.sh --uninstall            # remove fixit from this machine
 ```
 
 | Env var | Meaning |
@@ -187,14 +188,19 @@ The installer tries `apt`, then `dnf`, then `pacman` automatically.
 **Uninstall**
 
 ```bash
-# remove managed block from ~/.zshrc (delete lines between the markers)
-# >>> fixit.zsh >>>
-# ...
-# <<< fixit.zsh <<<
+# npx
+npx github:arjunagi-a-rehman/dum-tum --uninstall
 
-rm -rf ~/.local/share/fixit
-source ~/.zshrc
+# curl
+curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- --uninstall
+
+# local clone
+./install.sh --uninstall
 ```
+
+Then reload: `source ~/.zshrc`
+
+This removes `~/.local/share/fixit` and the managed `# >>> fixit.zsh >>>` block from `~/.zshrc`.
 
 ---
 
