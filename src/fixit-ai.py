@@ -2,13 +2,15 @@
 """fixit AI helpers.
 
 Usage:
-  fixit-ai.py extract   # stdin: free text / JSON / JSONL -> one command on stdout
-  fixit-ai.py body      # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body on stdout
+    fixit-ai.py extract   # stdin: free text / JSON / JSONL -> one command on stdout
+    fixit-ai.py body      # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body on stdout
 """
+
 import json
 import os
 import re
 import sys
+from typing import Any
 
 HEADS = {
     "find", "ls", "cd", "cat", "grep", "rg", "fd", "mdfind", "locate", "open", "git",
@@ -17,6 +19,7 @@ HEADS = {
     "awk", "chmod", "touch", "which", "where", "type", "tree", "bat", "eza", "clear",
     "gls", "mdls", "xargs", "sort", "uniq", "zip", "unzip", "kill", "scp", "kubectl",
 }
+
 PROSE = re.compile(
     r"^(we |i |the |this |output|i.ll |i will|i need|presumably|"
     r"common |also |but |so |keep |reply |here |just |use )",
@@ -24,14 +27,16 @@ PROSE = re.compile(
 )
 
 
-def head_of(s):
+def head_of(s: str) -> str:
+    """Return the command head of a line, stripping sudo and path prefixes."""
     s = s.strip()
     if s.startswith("sudo "):
         s = s[5:].lstrip()
     return s.split()[0].split("/")[-1] if s else ""
 
 
-def extract(t):
+def extract(t: str) -> str:
+    """Pull the single most plausible shell command out of free-form LLM text."""
     if not t:
         return ""
     t = re.sub(r"^```(?:\w+)?\s*", "", t.strip())
@@ -53,7 +58,8 @@ def extract(t):
     return ""
 
 
-def collect_text(obj, parts):
+def collect_text(obj: Any, parts: list) -> None:
+    """Recursively gather text fragments from arbitrary JSON (CLI/JSONL output)."""
     if isinstance(obj, str):
         if obj.strip():
             parts.append(obj)
@@ -81,13 +87,22 @@ def collect_text(obj, parts):
         collect_text(details, parts)
 
 
-def parse_payload(raw):
+def _report_error(ev: dict) -> bool:
+    """Print an API error payload to stderr. Returns True if it was an error."""
+    err = ev["error"]
+    msg = err.get("message", err) if isinstance(err, dict) else err
+    sys.stderr.write(f"AI error: {msg}\n")
+    return True
+
+
+def parse_payload(raw: str) -> str:
+    """Normalize raw backend output (text, JSON, or JSONL) into plain text."""
     s = raw.strip()
     if not s:
         return ""
     lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
     json_lines = 0
-    parts = []
+    parts: list = []
     for line in lines:
         if not (line.startswith("{") or line.startswith("[")):
             continue
@@ -97,9 +112,7 @@ def parse_payload(raw):
             continue
         json_lines += 1
         if isinstance(ev, dict) and "error" in ev and "choices" not in ev:
-            err = ev["error"]
-            msg = err.get("message", err) if isinstance(err, dict) else err
-            sys.stderr.write(f"AI error: {msg}\n")
+            _report_error(ev)
             return ""
         collect_text(ev, parts)
     if json_lines >= 1 and parts:
@@ -112,9 +125,7 @@ def parse_payload(raw):
         except Exception:
             return raw
         if isinstance(r, dict) and "error" in r and "choices" not in r:
-            err = r["error"]
-            msg = err.get("message", err) if isinstance(err, dict) else err
-            sys.stderr.write(f"AI error: {msg}\n")
+            _report_error(r)
             return ""
         if isinstance(r, dict) and "choices" in r:
             msg = (r.get("choices") or [{}])[0].get("message") or {}
@@ -130,7 +141,7 @@ def parse_payload(raw):
     return raw
 
 
-def cmd_extract():
+def cmd_extract() -> None:
     raw = sys.stdin.read()
     t = parse_payload(raw)
     out = extract(t if isinstance(t, str) else "")
@@ -138,7 +149,7 @@ def cmd_extract():
         print(out)
 
 
-def cmd_body():
+def cmd_body() -> None:
     print(json.dumps({
         "model": os.environ["FX_MODEL"],
         "max_tokens": 800,
@@ -149,9 +160,13 @@ def cmd_body():
     }))
 
 
-if __name__ == "__main__":
+def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
     if mode == "body":
         cmd_body()
     else:
         cmd_extract()
+
+
+if __name__ == "__main__":
+    main()

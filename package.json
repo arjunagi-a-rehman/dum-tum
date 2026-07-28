@@ -6,15 +6,13 @@
     "fixit-zsh": "bin/fixit-zsh.js"
   },
   "scripts": {
-    "install-fixit": "bash install.sh"
+    "install-fixit": "bash install.sh",
+    "test": "bash tests/run-tests.sh"
   },
   "files": [
     "bin/",
+    "src/",
     "install.sh",
-    "fixit.zsh",
-    "fixit.bash",
-    "fixit-common.sh",
-    "fixit-ai.py",
     "README.md"
   ],
   "repository": {

@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # fixit-common.sh — shared core sourced by fixit.zsh and fixit.bash
 # Stage 1: local fuzzy matching (instant, offline)
 # Stage 2: AI resolver (OpenRouter / OpenCode / Codex)
@@ -109,7 +110,7 @@ _fx_confirm_run() {
 # Shared command-not-found logic. $1 = unknown command, rest = args.
 _fx_handle_not_found() {
   local cmd="$1"; shift
-  local full="$cmd${@:+ $*}"
+  local full="$cmd${*:+ $*}"
   local out d best
 
   # Natural language ("list all files") → AI, don't fuzzy-match the first word
@@ -122,7 +123,7 @@ _fx_handle_not_found() {
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
     if _fx_in_list "$best" "${_FX_DANGEROUS[@]}"; then
       printf '\033[33m? %s not found — closest: %s (not auto-running)\033[0m\n' "'$cmd'" "$best" >&2
-      _fx_confirm_run "$best${@:+ $*}" && return $?
+      _fx_confirm_run "$best${*:+ $*}" && return $?
     else
       printf '\033[33m↻ %s → %s\033[0m\n' "$cmd" "$best" >&2
       if "$best" "$@"; then
@@ -188,8 +189,9 @@ _fx_ai_sys_prompt() {
 }
 
 _fx_ai_user_payload() {  # $* = intent
-  local ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD; files here: $(ls -1 2>/dev/null | head -15 | tr '\n' ' ')"
-  local als="$(alias 2>/dev/null | head -30)"
+  local ctx als
+  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD; files here: $(ls -1 2>/dev/null | head -15 | tr '\n' ' ')"
+  als="$(alias 2>/dev/null | head -30)"
   printf '%s\nMy aliases:\n%s\nTask/failed input: %s' "$ctx" "$als" "$*"
 }
 
