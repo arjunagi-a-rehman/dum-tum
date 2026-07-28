@@ -397,8 +397,9 @@ select_model() {
       )
       ;;
     opencode)
+      # Full live list from the CLI (all providers configured in opencode)
       local listed
-      listed="$(opencode models 2>/dev/null | head -40 || true)"
+      listed="$(opencode models 2>/dev/null || true)"
       if [[ -n "$listed" ]]; then
         while IFS= read -r line; do
           line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -406,7 +407,6 @@ select_model() {
           local tok
           tok="$(echo "$line" | awk '{print $1}')"
           [[ "$tok" == */* ]] && models+=("$tok")
-          (( ${#models[@]} >= 12 )) && break
         done <<<"$listed"
       fi
       if [[ ${#models[@]} -eq 0 ]]; then
@@ -419,20 +419,52 @@ select_model() {
       fi
       ;;
     codex)
-      printf "  [1] (Codex default — recommended)\n"
-      printf "  [2] Custom model id…\n"
+      # Live catalog from the CLI (visibility=list only)
+      local listed
+      listed="$(codex debug models 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    for m in d.get("models", []):
+        s = m.get("slug") or ""
+        if m.get("visibility") == "list" and s and not s.startswith("codex-"):
+            print(s)
+except Exception:
+    pass
+' 2>/dev/null || true)"
+      if [[ -n "$listed" ]]; then
+        while IFS= read -r slug; do
+          [[ -n "$slug" ]] && models+=("$slug")
+        done <<<"$listed"
+      fi
+      if [[ ${#models[@]} -eq 0 ]]; then
+        models=("gpt-5.6-sol" "gpt-5.5" "gpt-5.4")
+      fi
+      # Codex CLI default comes first; selecting it leaves FX_MODEL unset
+      printf "  [1] (Codex CLI default — recommended)\n"
+      i=2
+      for m in "${models[@]}"; do
+        printf "  [%d] %s\n" "$i" "$m"
+        [[ -n "$hint" && "$m" == "$hint" ]] && default=$i
+        i=$((i+1))
+      done
+      printf "  [%d] Custom model id…\n" "$i"
+      local max=$i
       [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
-      printf "Select [1-2] (default 1): "
+      printf "Select [1-%d] (default %d): " "$max" "$default"
       read_tty choice
-      choice="${choice:-1}"
-      case "$choice" in
-        2)
-          printf "Model id (must be allowed for your Codex login) [%s]: " "${hint:-}"
-          read_tty custom
-          MODEL="${custom:-$hint}"
-          ;;
-        *) MODEL="" ;;
-      esac
+      choice="${choice:-$default}"
+      if [[ "$choice" == "1" ]]; then
+        MODEL=""
+      elif [[ "$choice" == "$max" ]]; then
+        printf "Model id (must be allowed for your Codex login) [%s]: " "${hint:-}"
+        read_tty custom
+        MODEL="${custom:-$hint}"
+      elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 2 && choice < max )); then
+        MODEL="${models[$((choice-2))]}"
+      else
+        MODEL=""
+      fi
       [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (Codex default)"
       return 0
       ;;
