@@ -514,17 +514,35 @@ test_ai() {
   info "Testing AI backend ($PROVIDER)…"
   local sug rc=0
   set +e
-  sug="$(
+  # background + watchdog: CLI backends can queue for a long time
+  local tmpout pid waited=0 limit=120
+  tmpout="$(mktemp)"
+  (
     FX_PROVIDER="$PROVIDER" \
     FX_MODEL="$MODEL" \
     OPENROUTER_API_KEY="$API_KEY" \
+    FX_AI_TIMEOUT=100 \
     zsh -c '
       source "$1"
-      # disable hooks noise
       _fx_ai "print only this exact shell command on one line: ls -la"
     ' zsh "$INSTALL_PATH" 2>/dev/null
-  )"
-  rc=$?
+  ) >"$tmpout" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( waited >= limit )); then
+      kill "$pid" 2>/dev/null
+      sleep 1
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      rc=124
+      break
+    fi
+    sleep 1
+    waited=$((waited+1))
+  done
+  [[ "$rc" -eq 0 ]] && wait "$pid" 2>/dev/null
+  sug="$(cat "$tmpout" 2>/dev/null)"
+  rm -f "$tmpout"
   set -e
 
   sug="$(echo "$sug" | head -1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
