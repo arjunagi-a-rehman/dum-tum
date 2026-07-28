@@ -23,9 +23,11 @@ SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || true)"
 API_KEY=""
 PROVIDER=""
 MODEL=""
+VARIANT=""
 PROVIDER_FROM_CLI=0
 MODEL_FROM_CLI=0
 KEY_FROM_CLI=0
+VARIANT_FROM_CLI=0
 ASSUME_YES=0
 SKIP_DEPS=0
 SKIP_AI_TEST=0
@@ -45,6 +47,7 @@ Usage:
 Options:
   --provider NAME   openrouter | opencode | codex | none
   --model ID        Model id for the chosen provider
+  --variant LEVEL   Reasoning effort (codex/opencode: low|medium|high|...)
   --key KEY         OpenRouter API key (provider=openrouter)
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
@@ -56,6 +59,7 @@ Env (used when --yes / non-interactive; interactive always prompts):
   OPENROUTER_API_KEY   Same as --key
   FX_PROVIDER          Same as --provider
   FX_MODEL             Same as --model
+  FX_VARIANT           Same as --variant
   FIXIT_HOME           Install dir (default: ~/.local/share/fixit)
   FIXIT_RAW            Raw GitHub base URL override
 EOF
@@ -69,6 +73,8 @@ while [[ $# -gt 0 ]]; do
     --provider=*) PROVIDER="${1#--provider=}"; PROVIDER_FROM_CLI=1; shift ;;
     --model) MODEL="${2:-}"; MODEL_FROM_CLI=1; shift 2 ;;
     --model=*) MODEL="${1#--model=}"; MODEL_FROM_CLI=1; shift ;;
+    --variant) VARIANT="${2:-}"; VARIANT_FROM_CLI=1; shift 2 ;;
+    --variant=*) VARIANT="${1#--variant=}"; VARIANT_FROM_CLI=1; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --skip-ai-test) SKIP_AI_TEST=1; shift ;;
@@ -87,6 +93,9 @@ if [[ "$PROVIDER_FROM_CLI" -eq 0 && -n "${FX_PROVIDER:-}" ]]; then
 fi
 if [[ "$MODEL_FROM_CLI" -eq 0 && -n "${FX_MODEL:-}" ]]; then
   MODEL="$FX_MODEL"
+fi
+if [[ "$VARIANT_FROM_CLI" -eq 0 && -n "${FX_VARIANT:-}" ]]; then
+  VARIANT="$FX_VARIANT"
 fi
 
 info()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
@@ -493,6 +502,80 @@ except Exception:
   ok "Model: $MODEL"
 }
 
+# ---------- reasoning effort (codex/opencode) ----------
+select_variant() {
+  [[ "$PROVIDER" == "codex" || "$PROVIDER" == "opencode" ]] || { VARIANT=""; return 0; }
+
+  if [[ "$VARIANT_FROM_CLI" -eq 1 ]]; then
+    ok "Reasoning: ${VARIANT:-"(model default)"} (from --variant)"
+    return 0
+  fi
+
+  local -a levels=() def_level=""
+  if [[ "$PROVIDER" == "codex" ]]; then
+    local info_line
+    info_line="$(codex debug models 2>/dev/null | python3 -c '
+import json, sys
+want = sys.argv[1] if len(sys.argv) > 1 else ""
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+ms = [m for m in d.get("models", []) if m.get("visibility") == "list"]
+pick = None
+for m in ms:
+    if m.get("slug") == want:
+        pick = m
+        break
+if pick is None and ms:
+    pick = ms[0]
+if pick:
+    lv = [x["effort"] for x in pick.get("supported_reasoning_levels", [])]
+    print((pick.get("default_reasoning_level") or "") + "|" + ",".join(lv))
+' "${MODEL:-}" 2>/dev/null || true)"
+    def_level="${info_line%%|*}"
+    [[ "$info_line" == *"|"* ]] && IFS=',' read -rA levels <<< "${info_line#*|}"
+    levels=("${(@)levels:#}")   # drop empties
+    [[ ${#levels[@]} -eq 0 ]] && levels=(low medium high)
+  else
+    # opencode --variant: provider-specific; low/medium/high are the common ones
+    levels=(low medium high)
+  fi
+
+  if ! is_interactive; then
+    [[ -n "$VARIANT" ]] && ok "Reasoning: $VARIANT" || ok "Reasoning: (model default)"
+    return 0
+  fi
+
+  local hint="$VARIANT"
+  echo ""
+  info "Reasoning effort for ${MODEL:-$PROVIDER}"
+  local i=1 choice default=1
+  printf "  [1] (model default%s)\n" "${def_level:+: $def_level}"
+  i=2
+  local -a shown=()
+  local l
+  for l in "${levels[@]}"; do
+    printf "  [%d] %s\n" "$i" "$l"
+    shown+=("$l")
+    [[ -n "$hint" && "$l" == "$hint" ]] && default=$i
+    i=$((i+1))
+  done
+  local max=$((i-1))
+  [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
+  printf "Select [1-%d] (default %d): " "$max" "$default"
+  read_tty choice
+  choice="${choice:-$default}"
+  if [[ "$choice" == "1" ]]; then
+    VARIANT=""
+  elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 2 && choice <= max )); then
+    VARIANT="${shown[$((choice-2))]}"
+  else
+    VARIANT=""
+  fi
+  [[ -n "$VARIANT" ]] && ok "Reasoning: $VARIANT" || ok "Reasoning: (model default)"
+}
+
 # ---------- smoke test ----------
 test_ai() {
   [[ "$SKIP_AI_TEST" -eq 1 ]] && return 0
@@ -514,17 +597,36 @@ test_ai() {
   info "Testing AI backend ($PROVIDER)…"
   local sug rc=0
   set +e
-  sug="$(
+  # background + watchdog: CLI backends can queue for a long time
+  local tmpout pid waited=0 limit=120
+  tmpout="$(mktemp)"
+  (
     FX_PROVIDER="$PROVIDER" \
     FX_MODEL="$MODEL" \
+    FX_VARIANT="$VARIANT" \
     OPENROUTER_API_KEY="$API_KEY" \
+    FX_AI_TIMEOUT=100 \
     zsh -c '
       source "$1"
-      # disable hooks noise
       _fx_ai "print only this exact shell command on one line: ls -la"
     ' zsh "$INSTALL_PATH" 2>/dev/null
-  )"
-  rc=$?
+  ) >"$tmpout" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( waited >= limit )); then
+      kill "$pid" 2>/dev/null
+      sleep 1
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      rc=124
+      break
+    fi
+    sleep 1
+    waited=$((waited+1))
+  done
+  [[ "$rc" -eq 0 ]] && wait "$pid" 2>/dev/null
+  sug="$(cat "$tmpout" 2>/dev/null)"
+  rm -f "$tmpout"
   set -e
 
   sug="$(echo "$sug" | head -1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -553,6 +655,7 @@ test_ai() {
       select_provider
       maybe_ask_key
       select_model
+      select_variant
       test_ai
       ;;
     3)
@@ -568,7 +671,7 @@ test_ai() {
 }
 
 write_zshrc_block() {
-  local key_line model_line provider_line
+  local key_line model_line provider_line variant_line
   provider_line="export FX_PROVIDER=\"${PROVIDER:-none}\""
 
   if [[ -n "$MODEL" ]]; then
@@ -577,6 +680,14 @@ write_zshrc_block() {
     model_line="export FX_MODEL=\"$mesc\""
   else
     model_line='# export FX_MODEL="..."   # optional; omit to use provider default'
+  fi
+
+  if [[ -n "$VARIANT" ]]; then
+    local vesc="${VARIANT//\\/\\\\}"
+    vesc="${vesc//\"/\\\"}"
+    variant_line="export FX_VARIANT=\"$vesc\""
+  else
+    variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode)'
   fi
 
   if [[ "$PROVIDER" == "openrouter" && -n "$API_KEY" ]]; then
@@ -596,6 +707,7 @@ $MARKER_BEGIN
 source "$INSTALL_PATH"
 $provider_line
 $model_line
+$variant_line
 $key_line
 $MARKER_END
 EOF
@@ -762,6 +874,7 @@ main() {
   select_provider
   maybe_ask_key
   select_model
+  select_variant
   test_ai
   write_zshrc_block
   ensure_zsh_default

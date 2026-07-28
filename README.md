@@ -169,7 +169,7 @@ The installer tries `apt`, then `dnf`, then `pacman` automatically.
 
 ./install.sh --provider openrouter --key sk-or-v1-...
 ./install.sh --provider opencode --model anthropic/claude-sonnet-4
-./install.sh --provider codex
+./install.sh --provider codex --model gpt-5.6-luna --variant low
 ./install.sh --provider none
 ./install.sh --yes                  # less prompting
 ./install.sh --skip-deps            # do not apt/brew install
@@ -276,6 +276,8 @@ fix
 |----------|---------|---------|
 | `FX_PROVIDER` | `openrouter` | `openrouter` · `opencode` · `codex` · `none` |
 | `FX_MODEL` | provider default | Model id (`deepseek/deepseek-v4-flash` if OpenRouter + unset) |
+| `FX_VARIANT` | model default | Reasoning effort (codex/opencode: `low` · `medium` · `high` · …) |
+| `FX_AI_TIMEOUT` | `90` | Seconds before a CLI backend call is killed |
 | `OPENROUTER_API_KEY` | empty | Required when `FX_PROVIDER=openrouter` |
 | `FX_AI_ON_FAIL` | `1` | Ask AI to fix failed multi-command tools (`go`, `git`, `npm`, `docker`, …) |
 

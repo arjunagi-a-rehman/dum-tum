@@ -376,26 +376,56 @@ PY
   _fx_ai_http "$body" | _fx_ai_extract
 }
 
+# Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
+_fx_timeout() {  # $1=seconds, $2...=cmd
+  local secs="$1"; shift
+  local tmpout rc=0
+  tmpout="$(mktemp)"
+  "$@" >"$tmpout" 2>/dev/null &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( waited >= secs )); then
+      kill "$pid" 2>/dev/null
+      sleep 1
+      kill -9 "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      rc=124
+      break
+    fi
+    sleep 1
+    (( waited += 1 ))
+  done
+  (( rc == 0 )) && wait "$pid" 2>/dev/null
+  cat "$tmpout"
+  rm -f "$tmpout"
+  return $rc
+}
+
 _fx_ai_opencode() {  # $* = intent
   local prompt margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
-  opencode run "${margs[@]}" --format json -- "$prompt" 2>/dev/null | _fx_ai_extract
+  # FX_VARIANT = reasoning effort (e.g. low/medium/high) when the model supports it
+  [[ -n "${FX_VARIANT:-}" ]] && margs+=(--variant "$FX_VARIANT")
+  _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run "${margs[@]}" --format json -- "$prompt" | _fx_ai_extract
 }
 
 _fx_ai_codex() {  # $* = intent
   local prompt out margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
+  # FX_VARIANT = reasoning effort; codex reads it as a config override
+  [[ -n "${FX_VARIANT:-}" ]] && margs+=(-c "model_reasoning_effort=\"$FX_VARIANT\"")
   out="$(mktemp)"
   # last message only; ephemeral; allow outside git repos
   # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
-  if codex exec --ephemeral --skip-git-repo-check --color never \
+  if _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
       -o "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null 2>&1; then
     _fx_ai_extract <"$out"
   else
     # fallback: capture stdout if -o failed / older CLI
-    codex exec --ephemeral --skip-git-repo-check --color never \
+    _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
       "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract
   fi
   rm -f "$out"
