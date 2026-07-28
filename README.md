@@ -17,7 +17,7 @@ No `f`. No `??`. No `sgpt "..."`. No mode switch. You type into your shell the w
 macOS + Linux · zsh + bash · MIT
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
+npx dum-tum
 ```
 
 ---
@@ -63,13 +63,13 @@ The second difference: **it doesn't demand another API key.** If you already hav
 **macOS, Ubuntu, Debian, Fedora, Arch:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
+npx dum-tum
 ```
 
-Or with Node:
+Or without Node:
 
 ```bash
-npx github:arjunagi-a-rehman/dum-tum
+curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 ```
 
 The installer detects your login shell, installs deps, finds `opencode`/`codex` on your PATH, lets you pick a provider and model, smoke-tests it, and writes your rc file. Then:
