@@ -2,7 +2,7 @@
 
 > `dum-tum` is the project/repo name. The tool it installs is **fixit.zsh**.
 
-Turn **typos** and **plain English** into real shell commands — on **macOS** and **Ubuntu/Linux**.
+Turn **typos** and **plain English** into real shell commands — on **macOS** and **Ubuntu/Linux**, in **zsh** or **bash**.
 
 ## Why this exists (intention)
 
@@ -93,28 +93,32 @@ list all files
 
 | Tool | macOS | Ubuntu |
 |------|--------|--------|
-| **zsh** | Default since Catalina | Install via installer / `sudo apt install zsh` |
+| **zsh** or **bash 4+** | zsh default since Catalina; bash via Homebrew | bash is default; zsh optional |
 | **python3** | `/usr/bin/python3` or Homebrew | `sudo apt install python3` |
 | **curl** | Preinstalled | Preinstalled or `apt install curl` |
 | **AI backend** | Optional — OpenCode, Codex CLI, or OpenRouter key | same |
 
-### Default shell must be zsh
+### Which shell gets configured?
 
-fixit only hooks into **zsh**.
+The installer auto-detects your login shell (`$SHELL`):
 
-**macOS** — usually already zsh:
+- login shell is **zsh** → writes `~/.zshrc`
+- login shell is **bash** → writes `~/.bashrc`
+- anything else → configures **both**
+
+Force it with `--shell zsh`, `--shell bash`, or `--shell both`.
+
+### Shell support: zsh and bash
+
+fixit hooks into **zsh** and **bash** (bash 4+).
+
+**macOS** — zsh is the default; bash 3.2 at `/bin/bash` is too old for the Enter-hook, but typo fixing still works. For full bash support use Homebrew bash 5.
+
+**Ubuntu** — bash works out of the box; zsh optional (`sudo apt install zsh`, `chsh -s $(which zsh)`).
 
 ```bash
-echo $SHELL    # expect /bin/zsh
+echo $SHELL    # /bin/zsh or /bin/bash both fine
 ```
-
-**Ubuntu** — often bash by default. After installing zsh:
-
-```bash
-chsh -s $(which zsh)
-```
-
-Log out and back in (or restart the terminal). Until then you can still run `zsh` manually.
 
 AI backends (pick one at install, or set later):
 
@@ -214,10 +218,10 @@ This removes `~/.local/share/fixit`, replaces the managed zshrc block with a tin
 git clone https://github.com/arjunagi-a-rehman/dum-tum.git
 cd dum-tum
 mkdir -p ~/.local/share/fixit
-cp fixit.zsh ~/.local/share/fixit/fixit.zsh
+cp fixit.zsh fixit.bash fixit-common.sh fixit-ai.py ~/.local/share/fixit/
 ```
 
-Add to `~/.zshrc`:
+Add to `~/.zshrc` (or `~/.bashrc` with `fixit.bash`):
 
 ```zsh
 source "$HOME/.local/share/fixit/fixit.zsh"
@@ -358,7 +362,10 @@ whence -w command_not_found_handler   # run inside zsh after source
 
 | Path | Role |
 |------|------|
-| `fixit.zsh` | Main shell script |
+| `fixit.zsh` | zsh adapter (hooks) |
+| `fixit.bash` | bash adapter (hooks) |
+| `fixit-common.sh` | shared fuzzy + AI core |
+| `fixit-ai.py` | AI payload/extract helper |
 | `install.sh` | macOS + Ubuntu installer |
 | `bin/fixit-zsh.js` | `npx` entrypoint |
 | `package.json` | npm / npx metadata |
