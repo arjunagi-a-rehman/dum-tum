@@ -11,8 +11,8 @@ set -euo pipefail
 
 REPO_RAW="${FIXIT_RAW:-https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main}"
 INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
-INSTALL_PATH="$INSTALL_DIR/fixit.zsh"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
+BASHRC="$HOME/.bashrc"
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
 
@@ -35,6 +35,9 @@ DO_UNINSTALL=0
 
 HAVE_OPENCODE=0
 HAVE_CODEX=0
+SHELL_CHOICE=""
+DO_ZSH=0
+DO_BASH=0
 
 usage() {
   cat <<'EOF'
@@ -49,10 +52,11 @@ Options:
   --model ID        Model id for the chosen provider
   --variant LEVEL   Reasoning effort (codex/opencode: low|medium|high|...)
   --key KEY         OpenRouter API key (provider=openrouter)
+  --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
   --skip-ai-test    Skip the post-setup AI smoke test
-  --uninstall       Remove fixit.zsh and its ~/.zshrc block
+  --uninstall       Remove fixit from ~/.zshrc and ~/.bashrc
   --help, -h        Show this help
 
 Env (used when --yes / non-interactive; interactive always prompts):
@@ -78,6 +82,8 @@ while [[ $# -gt 0 ]]; do
     --yes|-y) ASSUME_YES=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --skip-ai-test) SKIP_AI_TEST=1; shift ;;
+    --shell) SHELL_CHOICE="${2:-}"; shift 2 ;;
+    --shell=*) SHELL_CHOICE="${1#--shell=}"; shift ;;
     --uninstall|uninstall) DO_UNINSTALL=1; shift ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
@@ -132,15 +138,46 @@ is_interactive() {
   [[ -t 0 || -r /dev/tty ]] && [[ "$ASSUME_YES" -eq 0 ]]
 }
 
+select_shells() {
+  case "${SHELL_CHOICE:-auto}" in
+    zsh)  DO_ZSH=1; DO_BASH=0 ;;
+    bash) DO_ZSH=0; DO_BASH=1 ;;
+    both|all) DO_ZSH=1; DO_BASH=1 ;;
+    auto|"")
+      local login_shell
+      login_shell="$(basename "${SHELL:-}")"
+      case "$login_shell" in
+        zsh)  DO_ZSH=1; DO_BASH=0 ;;
+        bash) DO_ZSH=0; DO_BASH=1 ;;
+        *)    DO_ZSH=1; DO_BASH=1 ;;
+      esac
+      ;;
+    *)
+      err "Invalid --shell: $SHELL_CHOICE (use zsh|bash|both)"
+      exit 1
+      ;;
+  esac
+  # zsh selected but missing → fall back to bash
+  if [[ "$DO_ZSH" -eq 1 ]] && ! have zsh; then
+    warn "zsh not found — configuring bash only"
+    DO_ZSH=0
+    DO_BASH=1
+  fi
+  local targets=()
+  [[ "$DO_ZSH" -eq 1 ]] && targets+=("zsh")
+  [[ "$DO_BASH" -eq 1 ]] && targets+=("bash")
+  ok "Shell targets: ${targets[*]}"
+}
+
 install_deps() {
   [[ "$SKIP_DEPS" -eq 1 ]] && return 0
   local need=()
-  have zsh     || need+=(zsh)
+  [[ "$DO_ZSH" -eq 1 ]] && { have zsh || need+=(zsh); }
   have python3 || need+=(python3)
   have curl    || need+=(curl)
 
   if [[ ${#need[@]} -eq 0 ]]; then
-    ok "Dependencies present (zsh, python3, curl)"
+    ok "Dependencies present"
     return 0
   fi
 
@@ -178,7 +215,7 @@ install_deps() {
     exit 1
   fi
 
-  have zsh && have python3 && have curl || {
+  { [[ "$DO_ZSH" -eq 0 ]] || have zsh; } && have python3 && have curl || {
     err "Still missing tools after install attempt."
     exit 1
   }
@@ -187,17 +224,20 @@ install_deps() {
 
 install_script() {
   mkdir -p "$INSTALL_DIR"
-  local src=""
-  if [[ -n "$SELF_DIR" && -f "$SELF_DIR/fixit.zsh" ]]; then
-    src="$SELF_DIR/fixit.zsh"
-    info "Using local fixit.zsh from $SELF_DIR"
-    cp "$src" "$INSTALL_PATH"
+  local f
+  if [[ -n "$SELF_DIR" && -f "$SELF_DIR/fixit.zsh" && -f "$SELF_DIR/fixit-common.sh" ]]; then
+    info "Using local scripts from $SELF_DIR"
+    for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
+      [[ -f "$SELF_DIR/$f" ]] && cp "$SELF_DIR/$f" "$INSTALL_DIR/$f"
+    done
   else
-    info "Downloading fixit.zsh from GitHub…"
-    curl -fsSL "$REPO_RAW/fixit.zsh" -o "$INSTALL_PATH"
+    info "Downloading scripts from GitHub…"
+    for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
+      curl -fsSL "$REPO_RAW/$f" -o "$INSTALL_DIR/$f"
+    done
   fi
-  chmod 644 "$INSTALL_PATH"
-  ok "Installed → $INSTALL_PATH"
+  chmod 644 "$INSTALL_DIR"/fixit-common.sh "$INSTALL_DIR"/fixit.zsh "$INSTALL_DIR"/fixit.bash "$INSTALL_DIR"/fixit-ai.py
+  ok "Installed → $INSTALL_DIR"
 }
 
 detect_ai_clis() {
@@ -603,6 +643,11 @@ test_ai() {
 
   info "Testing AI backend ($PROVIDER)…"
   local sug rc=0
+  local test_shell="zsh" test_file="$INSTALL_DIR/fixit.zsh"
+  if [[ "$DO_ZSH" -eq 0 ]]; then
+    test_shell="bash"
+    test_file="$INSTALL_DIR/fixit.bash"
+  fi
   set +e
   # background + watchdog: CLI backends can queue for a long time
   local tmpout pid waited=0 limit=120
@@ -613,10 +658,10 @@ test_ai() {
     FX_VARIANT="$VARIANT" \
     OPENROUTER_API_KEY="$API_KEY" \
     FX_AI_TIMEOUT=100 \
-    zsh -c '
+    "$test_shell" -c '
       source "$1"
       _fx_ai "print only this exact shell command on one line: ls -la"
-    ' zsh "$INSTALL_PATH" 2>/dev/null
+    ' "$test_shell" "$test_file" 2>/dev/null
   ) >"$tmpout" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
@@ -677,7 +722,9 @@ test_ai() {
   esac
 }
 
-write_zshrc_block() {
+# write_rc_block <rc-file> <adapter-file>
+write_rc_block() {
+  local rc_file="$1" adapter="$2"
   local key_line model_line provider_line variant_line
   provider_line="export FX_PROVIDER=\"${PROVIDER:-none}\""
 
@@ -711,7 +758,7 @@ write_zshrc_block() {
   block=$(cat <<EOF
 $MARKER_BEGIN
 # https://github.com/arjunagi-a-rehman/dum-tum
-source "$INSTALL_PATH"
+source "$INSTALL_DIR/$adapter"
 $provider_line
 $model_line
 $variant_line
@@ -720,10 +767,10 @@ $MARKER_END
 EOF
 )
 
-  touch "$ZSHRC"
+  touch "$rc_file"
 
-  if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
-    info "Updating existing fixit block in $ZSHRC"
+  if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
+    info "Updating existing fixit block in $rc_file"
     local tmp repl_file
     tmp="$(mktemp)"
     repl_file="$(mktemp)"
@@ -733,37 +780,47 @@ EOF
       $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
-    ' "$ZSHRC" > "$tmp"
+    ' "$rc_file" > "$tmp"
     rm -f "$repl_file"
     if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
       printf '\n%s\n' "$block" >> "$tmp"
     fi
-    mv "$tmp" "$ZSHRC"
+    mv "$tmp" "$rc_file"
   else
-    info "Appending fixit block to $ZSHRC"
-    printf '\n%s\n' "$block" >> "$ZSHRC"
+    info "Appending fixit block to $rc_file"
+    printf '\n%s\n' "$block" >> "$rc_file"
   fi
-  ok "Configured $ZSHRC"
+  ok "Configured $rc_file"
 }
 
-ensure_zsh_default() {
+write_rc_blocks() {
+  [[ "$DO_ZSH" -eq 1 ]]  && write_rc_block "$ZSHRC" "fixit.zsh"
+  [[ "$DO_BASH" -eq 1 ]] && write_rc_block "$BASHRC" "fixit.bash"
+}
+
+ensure_shell_default() {
   local shell_now
   shell_now="$(basename "${SHELL:-}")"
-  if [[ "$shell_now" == "zsh" ]]; then
-    ok "Default shell is already zsh"
-    return 0
+
+  if [[ "$DO_ZSH" -eq 1 ]]; then
+    if [[ "$shell_now" == "zsh" ]]; then
+      ok "Default shell is already zsh"
+    else
+      local zsh_path
+      zsh_path="$(command -v zsh)"
+      warn "Your login shell is '$shell_now', not zsh."
+      echo "  Start zsh now:  zsh"
+      echo "  Make default:   chsh -s \"$zsh_path\""
+      if is_ubuntu || [[ "$OS" == "Linux" ]]; then
+        if ! grep -q "^$zsh_path\$" /etc/shells 2>/dev/null; then
+          echo "  (If chsh complains, run: echo \"$zsh_path\" | sudo tee -a /etc/shells)"
+        fi
+      fi
+    fi
   fi
 
-  local zsh_path
-  zsh_path="$(command -v zsh)"
-  warn "Your login shell is '$shell_now', not zsh."
-  echo "  fixit only runs inside zsh."
-  echo "  Start zsh now:  zsh"
-  echo "  Make default:   chsh -s \"$zsh_path\""
-  if is_ubuntu || [[ "$OS" == "Linux" ]]; then
-    if ! grep -q "^$zsh_path\$" /etc/shells 2>/dev/null; then
-      echo "  (If chsh complains, run: echo \"$zsh_path\" | sudo tee -a /etc/shells)"
-    fi
+  if [[ "$DO_BASH" -eq 1 && "$shell_now" != "bash" ]]; then
+    warn "fixit for bash is configured in $BASHRC — it loads when you run bash."
   fi
 }
 
@@ -776,20 +833,28 @@ print_next_steps() {
     *)          ai_hint="off (local typos only)" ;;
   esac
 
+  local cfg_lines=""
+  [[ "$DO_ZSH" -eq 1 ]]  && cfg_lines="$cfg_lines
+│  zshrc:    $ZSHRC"
+  [[ "$DO_BASH" -eq 1 ]] && cfg_lines="$cfg_lines
+│  bashrc:   $BASHRC"
+
   cat <<EOF
 
 ┌─────────────────────────────────────────────────────────┐
-│  fixit.zsh installed on $OS_NAME
-│  Script:   $INSTALL_PATH
-│  Config:   $ZSHRC
+│  fixit installed on $OS_NAME
+│  Scripts:  $INSTALL_DIR$cfg_lines
 │  AI:       $ai_hint
 └─────────────────────────────────────────────────────────┘
 
 Reload your shell:
 
-  source $ZSHRC
+EOF
+  [[ "$DO_ZSH" -eq 1 ]]  && echo "  source $ZSHRC"
+  [[ "$DO_BASH" -eq 1 ]] && echo "  source $BASHRC"
+  cat <<EOF
 
-  # or open a new terminal tab (must be zsh)
+  # or open a new terminal tab
 
 Try:
 
@@ -808,8 +873,34 @@ Docs: https://github.com/arjunagi-a-rehman/dum-tum
 EOF
 }
 
+# leave cleanup block in one rc file so sourcing clears leftover env
+uninstall_rc() {
+  local rc_file="$1" cleanup="$2"
+  touch "$rc_file"
+  local tmp repl_file
+  tmp="$(mktemp)"
+  repl_file="$(mktemp)"
+  printf '%s\n' "$cleanup" > "$repl_file"
+  if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
+    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
+      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
+      $0 == end   { skip=0; next }
+      !skip       { print }
+    ' "$rc_file" > "$tmp"
+    if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
+      printf '\n%s\n' "$cleanup" >> "$tmp"
+    fi
+    mv "$tmp" "$rc_file"
+    ok "Updated $rc_file (removed config; clears FX_* on source)"
+  else
+    printf '\n%s\n' "$cleanup" >> "$rc_file"
+    ok "Added cleanup block to $rc_file (clears FX_* on source)"
+  fi
+  rm -f "$repl_file"
+}
+
 uninstall_fixit() {
-  info "Uninstalling fixit.zsh…"
+  info "Uninstalling fixit…"
   local removed=0
 
   # Leave a tiny marker block that unsets exports so `source ~/.zshrc`
@@ -818,35 +909,15 @@ uninstall_fixit() {
   local cleanup
   cleanup=$(cat <<EOF
 $MARKER_BEGIN
-# fixit uninstalled — clear leftover exports when you: source ~/.zshrc
-unset FX_PROVIDER FX_MODEL OPENROUTER_API_KEY 2>/dev/null || true
+# fixit uninstalled — clear leftover exports when you source this file
+unset FX_PROVIDER FX_MODEL FX_VARIANT OPENROUTER_API_KEY 2>/dev/null || true
 $MARKER_END
 EOF
 )
 
-  touch "$ZSHRC"
-  local tmp repl_file
-  tmp="$(mktemp)"
-  repl_file="$(mktemp)"
-  printf '%s\n' "$cleanup" > "$repl_file"
-  if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$ZSHRC" > "$tmp"
-    if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
-      printf '\n%s\n' "$cleanup" >> "$tmp"
-    fi
-    mv "$tmp" "$ZSHRC"
-    ok "Updated $ZSHRC (removed config; clears FX_* on source)"
-    removed=1
-  else
-    printf '\n%s\n' "$cleanup" >> "$ZSHRC"
-    ok "Added cleanup block to $ZSHRC (clears FX_* on source)"
-    removed=1
-  fi
-  rm -f "$repl_file"
+  uninstall_rc "$ZSHRC" "$cleanup"
+  [[ -f "$BASHRC" ]] && uninstall_rc "$BASHRC" "$cleanup"
+  removed=1
 
   if [[ -e "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
@@ -859,12 +930,13 @@ EOF
   if [[ "$removed" -eq 0 ]]; then
     warn "Nothing to uninstall."
   else
-    ok "fixit.zsh uninstalled"
+    ok "fixit uninstalled"
     echo ""
     echo "Finish cleanup in this shell:"
-    echo "  source $ZSHRC"
+    echo "  source $ZSHRC      # zsh"
+    echo "  source $BASHRC     # bash"
     echo ""
-    echo "That unsets FX_PROVIDER, FX_MODEL, OPENROUTER_API_KEY and drops the hook."
+    echo "That unsets FX_PROVIDER, FX_MODEL, FX_VARIANT, OPENROUTER_API_KEY and drops the hooks."
   fi
 }
 
@@ -874,7 +946,8 @@ main() {
     return 0
   fi
 
-  info "Installing fixit.zsh for ${OS_NAME}…"
+  info "Installing fixit for ${OS_NAME}…"
+  select_shells
   install_deps
   install_script
   detect_ai_clis
@@ -883,8 +956,8 @@ main() {
   select_model
   select_variant
   test_ai
-  write_zshrc_block
-  ensure_zsh_default
+  write_rc_blocks
+  ensure_shell_default
   print_next_steps
 }
 

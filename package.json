@@ -12,6 +12,9 @@
     "bin/",
     "install.sh",
     "fixit.zsh",
+    "fixit.bash",
+    "fixit-common.sh",
+    "fixit-ai.py",
     "README.md"
   ],
   "repository": {
