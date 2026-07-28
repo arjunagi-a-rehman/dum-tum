@@ -152,6 +152,11 @@ command_not_found_handler() {
 # Only read-only commands where re-running is guaranteed safe.
 _FX_SAFE=(cd cat ls less more head tail wc stat file vim nano vi bat open code)
 
+# Multi-command tools where a non-zero exit usually means a bad subcommand or
+# usage mistake (go to desktop, git psuh, npm runn build, …). On failure these
+# fall through to the AI resolver instead of staying quiet.
+_FX_MULTICMD=(go git docker kubectl helm npm npx yarn pnpm brew gh aws gcloud az cargo pip pip3 make terraform systemctl apt apt-get snap dnf pacman gem bundle composer)
+
 _fx_preexec() { _FX_LAST="$1"; _FX_FIXED=0 }
 _fx_precmd() {
   local rc=$?
@@ -159,20 +164,28 @@ _fx_precmd() {
   [[ -z "$_FX_LAST" ]] && return
   _FX_LASTFAIL="$_FX_LAST (exit $rc)"          # remember for the `fix` command
   local -a w; w=(${(z)_FX_LAST}); _FX_LAST=""
-  (( ${_FX_SAFE[(Ie)$w[1]]} )) || return       # not a safe command → stay quiet
-  local i arg out d fixed
-  for (( i=2; i<=$#w; i++ )); do
-    arg=$w[$i]
-    [[ "$arg" == -* || -e "$arg" ]] && continue
-    out=$(find . -maxdepth 2 -not -path '*/.git*' 2>/dev/null | sed 's|^\./||' | _fx_best "${arg}")
-    d=${out%%$'\t'*}; fixed=${out#*$'\t'}
-    if [[ -n "$fixed" ]] && _fx_ok $d ${#arg} 2; then
-      w[$i]=$fixed; _FX_FIXED=1
-      print -u2 -P "%F{yellow}↻ $arg → $fixed%f"
-      eval "${(@q)w}"
-      return
-    fi
-  done
+  if (( ${_FX_SAFE[(Ie)$w[1]]} )); then        # safe read-only cmd → try path-typo fix
+    local i arg out d fixed
+    for (( i=2; i<=$#w; i++ )); do
+      arg=$w[$i]
+      [[ "$arg" == -* || -e "$arg" ]] && continue
+      out=$(find . -maxdepth 2 -not -path '*/.git*' 2>/dev/null | sed 's|^\./||' | _fx_best "${arg}")
+      d=${out%%$'\t'*}; fixed=${out#*$'\t'}
+      if [[ -n "$fixed" ]] && _fx_ok $d ${#arg} 2; then
+        w[$i]=$fixed; _FX_FIXED=1
+        print -u2 -P "%F{yellow}↻ $arg → $fixed%f"
+        eval "${(@q)w}"
+        return
+      fi
+    done
+  fi
+  # Failed multi-command tool → AI suggests the fix (still needs Enter).
+  # Silent without a key; disable with FX_AI_ON_FAIL=0.
+  (( ${FX_AI_ON_FAIL:-1} )) || return
+  [[ -n "$OPENROUTER_API_KEY" ]] || return
+  (( $#w >= 2 )) || return
+  (( ${_FX_MULTICMD[(Ie)$w[1]]} )) || return
+  _fx_ai_resolve "fix this failed command: $_FX_LASTFAIL"
 }
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _fx_preexec

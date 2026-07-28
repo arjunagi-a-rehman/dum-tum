@@ -253,6 +253,7 @@ fix
 |----------|---------|---------|
 | `OPENROUTER_API_KEY` | empty | Enables AI |
 | `FX_MODEL` | `deepseek/deepseek-v4-flash` | OpenRouter model id |
+| `FX_AI_ON_FAIL` | `1` | Ask AI to fix failed multi-command tools (`go`, `git`, `npm`, `docker`, …) |
 
 ```zsh
 export FX_MODEL="deepseek/deepseek-chat"
@@ -279,6 +280,8 @@ Enter pressed
     │
     └─ Known command failed?
           typo’d file arg on safe cmd    → fix path + re-run
+          multi-tool usage error
+          (go to desktop, git psuh, …)   → AI → confirm
 ```
 
 ---
