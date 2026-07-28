@@ -352,9 +352,8 @@ whence -w command_not_found_handler   # run inside zsh after source
 
 - **Local mode** never leaves your machine.
 - **AI mode** sends a short prompt (OS/shell, cwd, ~15 filenames, sample aliases, typed text) to your chosen backend (OpenRouter API, or local OpenCode/Codex which use their own auth/providers).
-- **Failed-command auto-fix asks first.** When a failed `git`/`npm`/`docker`/… command would be sent to AI, you get a `Send this failed command? [y/N]` prompt — nothing is transmitted silently.
-- **Secret redaction.** Common credential shapes (`--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`) are masked before any payload leaves the machine. Still, don’t paste secrets into natural-language prompts.
-- Only read-only fuzzy matches auto-run; AI always needs Enter.
+- **Secret guard.** Failed-command auto-fix never transmits a line that looks like it contains a credential (`--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`) — it’s skipped with a warning instead. The same shapes are also masked (`[REDACTED]`) before any other payload leaves the machine.
+- Only read-only fuzzy matches auto-run; AI suggestions never execute without you pressing **Enter**.
 - **Key handling.** The OpenRouter key and request body travel to `curl` via stdin/tempfile, not the command line (so they don’t show up in `ps`). The installer sets your rc file to `chmod 600` after writing the key. With `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` while that call runs.
 - Keep API keys out of git. If a key leaked, rotate it at [openrouter.ai/keys](https://openrouter.ai/keys).
 
