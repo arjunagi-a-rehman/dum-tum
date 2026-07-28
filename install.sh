@@ -534,8 +534,15 @@ if pick:
     print((pick.get("default_reasoning_level") or "") + "|" + ",".join(lv))
 ' "${MODEL:-}" 2>/dev/null || true)"
     def_level="${info_line%%|*}"
-    [[ "$info_line" == *"|"* ]] && IFS=',' read -rA levels <<< "${info_line#*|}"
-    levels=("${(@)levels:#}")   # drop empties
+    if [[ "$info_line" == *"|"* ]]; then
+      local csv="${info_line#*|}" lvl
+      IFS=',' read -ra levels <<< "$csv"
+      local -a clean=()
+      for lvl in "${levels[@]}"; do
+        [[ -n "$lvl" ]] && clean+=("$lvl")
+      done
+      levels=("${clean[@]}")
+    fi
     [[ ${#levels[@]} -eq 0 ]] && levels=(low medium high)
   else
     # opencode --variant: provider-specific; low/medium/high are the common ones
