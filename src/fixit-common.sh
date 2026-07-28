@@ -97,8 +97,11 @@ _fx_confirm_run() {
       eval "$cmd"
       ;;
     e|E)
-      printf '\033[36m$\033[0m ' >&2
-      IFS= read -r cmd </dev/tty || return 1
+      if [[ -n "${ZSH_VERSION:-}" ]]; then
+        print -z -- "$cmd"   # prefill next prompt's line editor
+        return 0
+      fi
+      IFS= read -r -e -i "$cmd" -p '$ ' cmd </dev/tty || return 1
       [[ -z "${cmd// /}" ]] && return 1
       eval "$cmd"
       ;;
