@@ -12,7 +12,7 @@ The terminal is unforgiving: one wrong letter and you get `command not found`. N
 
 1. **Typos shouldn't stop you.** `sl`, `gti`, `cat dcoument.txt` — obvious mistakes get fixed instantly, locally, offline.
 2. **English should just work.** Type a sentence, get the right command from AI — but it *never* runs without your explicit Enter.
-3. **Safety first.** Destructive fuzzy matches (`rm`, `dd`, `kill`, …) are never auto-run. AI output always goes through a confirm prompt. Nothing executes behind your back.
+3. **Safety first.** Only read-only fuzzy matches (`ls`, `cat`, `pwd`, …) auto-run — everything else asks first. AI output always goes through a confirm prompt. Nothing executes behind your back.
 4. **Zero friction to install.** One `curl` or `npx` line on macOS or Ubuntu — no manual rc-file surgery.
 
 In short: the terminal should feel less like an exam and more like a conversation.
@@ -243,8 +243,8 @@ source ~/.zshrc
 | Typed | Result |
 |-------|--------|
 | `sl` | runs `ls` |
-| `gti status` | close match may auto-run if safe |
-| `kil 1234` | **won’t** auto-run `kill` (dangerous list) |
+| `gti status` | close match — **confirms first** (not on the read-only allowlist) |
+| `kil 1234` | **won’t** auto-run `kill` — confirm prompt only |
 
 ### Natural language (AI provider required)
 
@@ -308,14 +308,14 @@ Enter pressed
     │
     ├─ Unknown command?
     │     multi-word English             → AI
-    │     close typo + safe              → auto-run
-    │     close typo + dangerous         → confirm only
+    │     close typo + read-only cmd     → auto-run
+    │     close typo + anything else     → confirm only
     │     else                           → AI
     │
     └─ Known command failed?
           typo’d file arg on safe cmd    → fix path + re-run
           multi-tool usage error
-          (go to desktop, git psuh, …)   → AI → confirm
+          (go to desktop, git psuh, …)   → confirm send → AI → confirm
 ```
 
 ---
@@ -352,8 +352,10 @@ whence -w command_not_found_handler   # run inside zsh after source
 
 - **Local mode** never leaves your machine.
 - **AI mode** sends a short prompt (OS/shell, cwd, ~15 filenames, sample aliases, typed text) to your chosen backend (OpenRouter API, or local OpenCode/Codex which use their own auth/providers).
-- Don’t paste secrets into natural-language prompts.
-- Destructive fuzzy matches are not auto-run; AI always needs Enter.
+- **Failed-command auto-fix asks first.** When a failed `git`/`npm`/`docker`/… command would be sent to AI, you get a `Send this failed command? [y/N]` prompt — nothing is transmitted silently.
+- **Secret redaction.** Common credential shapes (`--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`) are masked before any payload leaves the machine. Still, don’t paste secrets into natural-language prompts.
+- Only read-only fuzzy matches auto-run; AI always needs Enter.
+- **Key handling.** The OpenRouter key and request body travel to `curl` via stdin/tempfile, not the command line (so they don’t show up in `ps`). The installer sets your rc file to `chmod 600` after writing the key. With `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` while that call runs.
 - Keep API keys out of git. If a key leaked, rotate it at [openrouter.ai/keys](https://openrouter.ai/keys).
 
 ---
