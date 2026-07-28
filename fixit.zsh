@@ -261,62 +261,87 @@ def extract(t):
             return ln
     return ""
 
-raw = sys.stdin.read()
-if not raw.strip():
-    sys.exit(0)
-t = ""
-s = raw.strip()
-if s.startswith("{") or s.startswith("["):
-    try:
-        if s.startswith("["):
-            # JSONL / event stream: stitch text fields
-            parts = []
-            for line in raw.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(ev, dict):
-                    for k in ("text", "content", "message", "delta"):
-                        v = ev.get(k)
-                        if isinstance(v, str) and v.strip():
-                            parts.append(v)
-                        elif isinstance(v, dict):
-                            c = v.get("content") or v.get("text")
-                            if isinstance(c, str) and c.strip():
-                                parts.append(c)
-            t = "\n".join(parts) if parts else ""
-        else:
+def collect_text(obj, parts):
+    if isinstance(obj, str):
+        if obj.strip():
+            parts.append(obj)
+        return
+    if isinstance(obj, list):
+        for x in obj:
+            collect_text(x, parts)
+        return
+    if not isinstance(obj, dict):
+        return
+    # OpenCode JSONL: {"type":"text","part":{"type":"text","text":"ls -la"}}
+    part = obj.get("part")
+    if isinstance(part, dict):
+        for k in ("text", "content"):
+            v = part.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v)
+    for k in ("text", "content", "message", "delta", "output", "reasoning"):
+        v = obj.get(k)
+        if isinstance(v, str) and v.strip():
+            parts.append(v)
+        elif isinstance(v, (dict, list)):
+            collect_text(v, parts)
+    details = obj.get("reasoning_details")
+    if isinstance(details, list):
+        collect_text(details, parts)
+
+def parse_payload(raw):
+    s = raw.strip()
+    if not s:
+        return ""
+    # Prefer JSONL event streams (OpenCode --format json, Codex --json)
+    lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+    json_lines = 0
+    parts = []
+    for line in lines:
+        if not (line.startswith("{") or line.startswith("[")):
+            continue
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        json_lines += 1
+        if isinstance(ev, dict) and "error" in ev and "choices" not in ev:
+            err = ev["error"]
+            msg = err.get("message", err) if isinstance(err, dict) else err
+            sys.stderr.write(f"AI error: {msg}\n")
+            return ""
+        collect_text(ev, parts)
+    if json_lines >= 1 and parts:
+        return "\n".join(parts)
+    if json_lines >= 2:
+        # events parsed but no text fields found
+        return ""
+    # Single JSON blob (OpenRouter chat/completions)
+    if s.startswith("{") or s.startswith("["):
+        try:
             r = json.loads(s)
-            if isinstance(r, dict) and "error" in r:
-                err = r["error"]
-                msg = err.get("message", err) if isinstance(err, dict) else err
-                sys.stderr.write(f"AI error: {msg}\n")
-                sys.exit(0)
-            if isinstance(r, dict) and "choices" in r:
-                msg = (r.get("choices") or [{}])[0].get("message") or {}
-                t = msg.get("content")
-                if not (isinstance(t, str) and t.strip()):
-                    parts = []
-                    if isinstance(msg.get("reasoning"), str):
-                        parts.append(msg["reasoning"])
-                    for d in (msg.get("reasoning_details") or []):
-                        if isinstance(d, dict) and d.get("text"):
-                            parts.append(d["text"])
-                    t = "\n".join(parts)
-            elif isinstance(r, dict):
-                for k in ("text", "content", "message", "output"):
-                    v = r.get(k)
-                    if isinstance(v, str) and v.strip():
-                        t = v
-                        break
-    except Exception:
-        t = raw
-else:
-    t = raw
+        except Exception:
+            return raw
+        if isinstance(r, dict) and "error" in r and "choices" not in r:
+            err = r["error"]
+            msg = err.get("message", err) if isinstance(err, dict) else err
+            sys.stderr.write(f"AI error: {msg}\n")
+            return ""
+        if isinstance(r, dict) and "choices" in r:
+            msg = (r.get("choices") or [{}])[0].get("message") or {}
+            t = msg.get("content")
+            if isinstance(t, str) and t.strip():
+                return t
+            parts = []
+            collect_text(msg, parts)
+            return "\n".join(parts)
+        parts = []
+        collect_text(r, parts)
+        return "\n".join(parts) if parts else raw
+    return raw
+
+raw = sys.stdin.read()
+t = parse_payload(raw)
 out = extract(t if isinstance(t, str) else "")
 if out:
     print(out)
@@ -364,13 +389,14 @@ _fx_ai_codex() {  # $* = intent
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
   out="$(mktemp)"
   # last message only; ephemeral; allow outside git repos
+  # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
   if codex exec --ephemeral --skip-git-repo-check --color never \
-      -o "$out" "${margs[@]}" -- "$prompt" >/dev/null 2>&1; then
+      -o "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null 2>&1; then
     _fx_ai_extract <"$out"
   else
     # fallback: capture stdout if -o failed / older CLI
     codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" 2>/dev/null | _fx_ai_extract
+      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract
   fi
   rm -f "$out"
 }
