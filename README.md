@@ -218,7 +218,7 @@ This removes `~/.local/share/fixit`, replaces the managed zshrc block with a tin
 git clone https://github.com/arjunagi-a-rehman/dum-tum.git
 cd dum-tum
 mkdir -p ~/.local/share/fixit
-cp fixit.zsh fixit.bash fixit-common.sh fixit-ai.py ~/.local/share/fixit/
+cp src/fixit.zsh src/fixit.bash src/fixit-common.sh src/fixit-ai.py ~/.local/share/fixit/
 ```
 
 Add to `~/.zshrc` (or `~/.bashrc` with `fixit.bash`):
@@ -362,14 +362,21 @@ whence -w command_not_found_handler   # run inside zsh after source
 
 | Path | Role |
 |------|------|
-| `fixit.zsh` | zsh adapter (hooks) |
-| `fixit.bash` | bash adapter (hooks) |
-| `fixit-common.sh` | shared fuzzy + AI core |
-| `fixit-ai.py` | AI payload/extract helper |
+| `src/fixit.zsh` | zsh adapter (hooks) |
+| `src/fixit.bash` | bash adapter (hooks) |
+| `src/fixit-common.sh` | shared fuzzy + AI core |
+| `src/fixit-ai.py` | AI payload/extract helper |
 | `install.sh` | macOS + Ubuntu installer |
 | `bin/fixit-zsh.js` | `npx` entrypoint |
+| `tests/` | unit tests + shell checks (`npm test` or `bash tests/run-tests.sh`) |
 | `package.json` | npm / npx metadata |
 | `README.md` | This file |
+
+## Development
+
+```bash
+bash tests/run-tests.sh   # python unit tests + bash/zsh syntax + shellcheck
+```
 
 ---
 

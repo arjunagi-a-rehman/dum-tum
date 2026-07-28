@@ -225,15 +225,15 @@ install_deps() {
 install_script() {
   mkdir -p "$INSTALL_DIR"
   local f
-  if [[ -n "$SELF_DIR" && -f "$SELF_DIR/fixit.zsh" && -f "$SELF_DIR/fixit-common.sh" ]]; then
-    info "Using local scripts from $SELF_DIR"
+  if [[ -n "$SELF_DIR" && -f "$SELF_DIR/src/fixit.zsh" && -f "$SELF_DIR/src/fixit-common.sh" ]]; then
+    info "Using local scripts from $SELF_DIR/src"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      [[ -f "$SELF_DIR/$f" ]] && cp "$SELF_DIR/$f" "$INSTALL_DIR/$f"
+      [[ -f "$SELF_DIR/src/$f" ]] && cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
     done
   else
     info "Downloading scripts from GitHub…"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      curl -fsSL "$REPO_RAW/$f" -o "$INSTALL_DIR/$f"
+      curl -fsSL "$REPO_RAW/src/$f" -o "$INSTALL_DIR/$f"
     done
   fi
   chmod 644 "$INSTALL_DIR"/fixit-common.sh "$INSTALL_DIR"/fixit.zsh "$INSTALL_DIR"/fixit.bash "$INSTALL_DIR"/fixit-ai.py
@@ -796,6 +796,7 @@ EOF
 write_rc_blocks() {
   [[ "$DO_ZSH" -eq 1 ]]  && write_rc_block "$ZSHRC" "fixit.zsh"
   [[ "$DO_BASH" -eq 1 ]] && write_rc_block "$BASHRC" "fixit.bash"
+  return 0
 }
 
 ensure_shell_default() {
