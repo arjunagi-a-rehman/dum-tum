@@ -657,19 +657,37 @@ uninstall_fixit() {
   info "Uninstalling fixit.zsh…"
   local removed=0
 
-  if [[ -f "$ZSHRC" ]] && grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
+  # Leave a tiny marker block that unsets exports so `source ~/.zshrc`
+  # clears leftovers in the *current* shell (child process can't unset parent env).
+  # Re-install replaces this block with the real config.
+  local cleanup
+  cleanup=$(cat <<EOF
+$MARKER_BEGIN
+# fixit uninstalled — clear leftover exports when you: source ~/.zshrc
+unset FX_PROVIDER FX_MODEL OPENROUTER_API_KEY 2>/dev/null || true
+$MARKER_END
+EOF
+)
+
+  touch "$ZSHRC"
+  if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
     local tmp
     tmp="$(mktemp)"
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
-      $0 == begin { skip=1; next }
+    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v repl="$cleanup" '
+      $0 == begin { print repl; skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
     ' "$ZSHRC" > "$tmp"
+    if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
+      printf '\n%s\n' "$cleanup" >> "$tmp"
+    fi
     mv "$tmp" "$ZSHRC"
-    ok "Removed fixit block from $ZSHRC"
+    ok "Updated $ZSHRC (removed config; clears FX_* on source)"
     removed=1
   else
-    warn "No fixit block found in $ZSHRC"
+    printf '\n%s\n' "$cleanup" >> "$ZSHRC"
+    ok "Added cleanup block to $ZSHRC (clears FX_* on source)"
+    removed=1
   fi
 
   if [[ -e "$INSTALL_DIR" ]]; then
@@ -685,10 +703,10 @@ uninstall_fixit() {
   else
     ok "fixit.zsh uninstalled"
     echo ""
-    echo "Clear leftover env from this shell (if any):"
-    echo "  unset FX_PROVIDER FX_MODEL OPENROUTER_API_KEY"
-    echo "Reload:  source $ZSHRC"
-    echo "Or open a new terminal tab."
+    echo "Finish cleanup in this shell:"
+    echo "  source $ZSHRC"
+    echo ""
+    echo "That unsets FX_PROVIDER, FX_MODEL, OPENROUTER_API_KEY and drops the hook."
   fi
 }
 
