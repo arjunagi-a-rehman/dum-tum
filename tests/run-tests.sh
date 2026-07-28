@@ -13,6 +13,10 @@ info "Python unit tests"
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 ok "Python tests passed"
 
+info "Shell function tests"
+bash tests/test_shell.sh
+ok "Shell function tests passed"
+
 info "Shell syntax checks"
 bash -n install.sh src/fixit-common.sh src/fixit.bash
 if command -v zsh >/dev/null 2>&1; then
