@@ -389,13 +389,14 @@ _fx_ai_codex() {  # $* = intent
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
   out="$(mktemp)"
   # last message only; ephemeral; allow outside git repos
+  # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
   if codex exec --ephemeral --skip-git-repo-check --color never \
-      -o "$out" "${margs[@]}" -- "$prompt" >/dev/null 2>&1; then
+      -o "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null 2>&1; then
     _fx_ai_extract <"$out"
   else
     # fallback: capture stdout if -o failed / older CLI
     codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" 2>/dev/null | _fx_ai_extract
+      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract
   fi
   rm -f "$out"
 }

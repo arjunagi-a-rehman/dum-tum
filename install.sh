@@ -357,27 +357,16 @@ select_model() {
       fi
       ;;
     codex)
-      models=(
-        ""  # CLI default
-        "o4-mini"
-        "gpt-5"
-        "gpt-4.1"
-      )
-      printf "  [1] (Codex default)\n"
-      printf "  [2] o4-mini\n"
-      printf "  [3] gpt-5\n"
-      printf "  [4] gpt-4.1\n"
-      printf "  [5] Custom…\n"
-      printf "Select [1-5] (default 1): "
+      # ChatGPT-auth Codex rejects many API model ids (e.g. o4-mini).
+      # Prefer CLI default; custom only if the user knows a valid id.
+      printf "  [1] (Codex default — recommended)\n"
+      printf "  [2] Custom model id…\n"
+      printf "Select [1-2] (default 1): "
       read_tty choice
       choice="${choice:-1}"
       case "$choice" in
-        1) MODEL="" ;;
-        2) MODEL="o4-mini" ;;
-        3) MODEL="gpt-5" ;;
-        4) MODEL="gpt-4.1" ;;
-        5)
-          printf "Model id: "
+        2)
+          printf "Model id (must be allowed for your Codex login): "
           read_tty custom
           MODEL="$custom"
           ;;
