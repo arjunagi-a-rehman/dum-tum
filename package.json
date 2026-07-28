@@ -23,6 +23,8 @@
     "shell",
     "typo",
     "openrouter",
+    "opencode",
+    "codex",
     "cli",
     "fixit"
   ],

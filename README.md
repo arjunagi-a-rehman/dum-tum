@@ -26,7 +26,7 @@ In short: the terminal should feel less like an exam and more like a conversatio
 | `fix` | AI-corrects the last failed command |
 
 - **Stage 1** — local fuzzy matching (instant, offline)
-- **Stage 2** — optional AI via [OpenRouter](https://openrouter.ai)  
+- **Stage 2** — optional AI via **OpenCode**, **Codex CLI**, or [OpenRouter](https://openrouter.ai)  
   Suggestions are **never auto-run**: **Enter** = run · **e** = edit · **n** = cancel
 
 ---
@@ -47,31 +47,31 @@ curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/inst
 npx github:arjunagi-a-rehman/dum-tum
 ```
 
-With an API key — any of these work:
+Interactive install flow:
+
+1. Install deps + copy `fixit.zsh`
+2. Detect **OpenCode** / **Codex** on `PATH`
+3. **Select provider** — OpenCode · Codex · OpenRouter key · Skip AI
+4. **Select model** (curated list or custom)
+5. **Smoke-test** the backend
+6. Write `~/.zshrc` · done
+
+Non-interactive examples:
 
 ```bash
-# as a parameter
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- --key "sk-or-v1-YOUR_KEY"
-npx github:arjunagi-a-rehman/dum-tum --key "sk-or-v1-YOUR_KEY"
-npx github:arjunagi-a-rehman/dum-tum --key="sk-or-v1-YOUR_KEY"
+# OpenRouter
+curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- \
+  --yes --provider openrouter --key "sk-or-v1-YOUR_KEY"
 
-# from the environment
-OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY" npx github:arjunagi-a-rehman/dum-tum
-export OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY"   # then just run the installer
+# OpenCode or Codex (must already be installed + logged in)
+./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
+./install.sh --yes --provider codex --model o4-mini
+
+# Local typos only
+./install.sh --yes --provider none
 ```
 
-Non-interactive (CI / skip prompts):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash -s -- --yes
-```
-
-The installer will:
-
-1. Check / install **zsh**, **python3**, **curl** (apt on Ubuntu, brew on Mac if needed)
-2. Copy `fixit.zsh` → `~/.local/share/fixit/fixit.zsh`
-3. Add a managed block to `~/.zshrc` (safe to re-run; updates in place)
-4. Optionally prompt for an OpenRouter API key
+Also works with env vars: `FX_PROVIDER`, `FX_MODEL`, `OPENROUTER_API_KEY`.
 
 Then reload:
 
@@ -96,7 +96,7 @@ list all files
 | **zsh** | Default since Catalina | Install via installer / `sudo apt install zsh` |
 | **python3** | `/usr/bin/python3` or Homebrew | `sudo apt install python3` |
 | **curl** | Preinstalled | Preinstalled or `apt install curl` |
-| **OpenRouter key** | Optional (AI features) | Optional (AI features) |
+| **AI backend** | Optional — OpenCode, Codex CLI, or OpenRouter key | same |
 
 ### Default shell must be zsh
 
@@ -116,7 +116,14 @@ chsh -s $(which zsh)
 
 Log out and back in (or restart the terminal). Until then you can still run `zsh` manually.
 
-Get an API key (AI): [https://openrouter.ai/keys](https://openrouter.ai/keys)
+AI backends (pick one at install, or set later):
+
+| Provider | Needs |
+|----------|--------|
+| **OpenCode** | `opencode` on `PATH`, already authenticated |
+| **Codex CLI** | `codex` on `PATH`, already authenticated |
+| **OpenRouter** | API key from [openrouter.ai/keys](https://openrouter.ai/keys) |
+| **none** | Local typo fixes only |
 
 ---
 
@@ -160,14 +167,20 @@ The installer tries `apt`, then `dnf`, then `pacman` automatically.
 ```bash
 ./install.sh --help
 
-./install.sh --key sk-or-v1-...     # set API key
+./install.sh --provider openrouter --key sk-or-v1-...
+./install.sh --provider opencode --model anthropic/claude-sonnet-4
+./install.sh --provider codex
+./install.sh --provider none
 ./install.sh --yes                  # less prompting
 ./install.sh --skip-deps            # do not apt/brew install
+./install.sh --skip-ai-test         # skip smoke test
 ```
 
 | Env var | Meaning |
 |---------|---------|
-| `OPENROUTER_API_KEY` | Same as `--key` |
+| `FX_PROVIDER` | `openrouter` · `opencode` · `codex` · `none` |
+| `FX_MODEL` | Model id (provider-specific) |
+| `OPENROUTER_API_KEY` | Same as `--key` (OpenRouter only) |
 | `FIXIT_HOME` | Install directory (default `~/.local/share/fixit`) |
 | `FIXIT_RAW` | Override raw GitHub base URL |
 
@@ -198,9 +211,9 @@ Add to `~/.zshrc`:
 
 ```zsh
 source "$HOME/.local/share/fixit/fixit.zsh"
-export OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY"
-# optional:
-# export FX_MODEL="deepseek/deepseek-v4-flash"
+export FX_PROVIDER="openrouter"   # or opencode | codex | none
+export FX_MODEL="deepseek/deepseek-v4-flash"
+export OPENROUTER_API_KEY="sk-or-v1-YOUR_KEY"   # openrouter only
 ```
 
 ```bash
@@ -219,7 +232,7 @@ source ~/.zshrc
 | `gti status` | close match may auto-run if safe |
 | `kil 1234` | **won’t** auto-run `kill` (dangerous list) |
 
-### Natural language (AI key required)
+### Natural language (AI provider required)
 
 ```text
 list all files
@@ -251,17 +264,22 @@ fix
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `OPENROUTER_API_KEY` | empty | Enables AI |
-| `FX_MODEL` | `deepseek/deepseek-v4-flash` | OpenRouter model id |
+| `FX_PROVIDER` | `openrouter` | `openrouter` · `opencode` · `codex` · `none` |
+| `FX_MODEL` | provider default | Model id (`deepseek/deepseek-v4-flash` if OpenRouter + unset) |
+| `OPENROUTER_API_KEY` | empty | Required when `FX_PROVIDER=openrouter` |
 | `FX_AI_ON_FAIL` | `1` | Ask AI to fix failed multi-command tools (`go`, `git`, `npm`, `docker`, …) |
 
 ```zsh
-export FX_MODEL="deepseek/deepseek-chat"
-# export FX_MODEL="openai/gpt-4o-mini"
-# export FX_MODEL="google/gemini-2.5-flash"
+export FX_PROVIDER="opencode"
+export FX_MODEL="anthropic/claude-sonnet-4"
+
+# or OpenRouter:
+export FX_PROVIDER="openrouter"
+export OPENROUTER_API_KEY="sk-or-v1-..."
+export FX_MODEL="deepseek/deepseek-v4-flash"
 ```
 
-See models: [openrouter.ai/models](https://openrouter.ai/models)
+Models: [openrouter.ai/models](https://openrouter.ai/models) · `opencode models` · Codex `-m` ids
 
 ---
 
@@ -293,9 +311,10 @@ Enter pressed
 | Installer can’t find `zsh` on Ubuntu | `sudo apt install zsh` then re-run; `chsh -s $(which zsh)` |
 | Commands do nothing in bash | You’re not in zsh — run `zsh` or change login shell |
 | Old behavior after update | Re-run installer or `source ~/.zshrc` |
-| `…resolving` then timeout | Network/VPN; check key & OpenRouter credits; try another `FX_MODEL` |
+| `…resolving` then timeout | Network/VPN; check provider auth; try another `FX_MODEL` |
 | `where is …` runs builtin `where` | Update to latest `fixit.zsh` (has accept-line hook) |
-| `OPENROUTER_API_KEY` empty | Add to `~/.zshrc` inside the fixit block; `source ~/.zshrc` |
+| `OPENROUTER_API_KEY` empty | Only needed for OpenRouter — set in fixit block or switch `FX_PROVIDER` |
+| `opencode/codex not found` | Install CLI + ensure it’s on `PATH`, or use OpenRouter |
 | Permission denied on install.sh | `chmod +x install.sh` or run via `bash install.sh` |
 
 Test deps:
@@ -305,7 +324,9 @@ echo $SHELL
 zsh --version
 python3 --version
 curl --version
+echo $FX_PROVIDER $FX_MODEL
 echo ${OPENROUTER_API_KEY:0:12}
+command -v opencode; command -v codex
 whence -w command_not_found_handler   # run inside zsh after source
 ```
 
@@ -314,7 +335,7 @@ whence -w command_not_found_handler   # run inside zsh after source
 ## Privacy & safety
 
 - **Local mode** never leaves your machine.
-- **AI mode** sends OpenRouter a short prompt: OS/shell, cwd, ~15 filenames, sample aliases, and the text you typed.
+- **AI mode** sends a short prompt (OS/shell, cwd, ~15 filenames, sample aliases, typed text) to your chosen backend (OpenRouter API, or local OpenCode/Codex which use their own auth/providers).
 - Don’t paste secrets into natural-language prompts.
 - Destructive fuzzy matches are not auto-run; AI always needs Enter.
 - Keep API keys out of git. If a key leaked, rotate it at [openrouter.ai/keys](https://openrouter.ai/keys).

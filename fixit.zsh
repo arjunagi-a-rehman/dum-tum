@@ -180,9 +180,9 @@ _fx_precmd() {
     done
   fi
   # Failed multi-command tool → AI suggests the fix (still needs Enter).
-  # Silent without a key; disable with FX_AI_ON_FAIL=0.
+  # Silent without a ready provider; disable with FX_AI_ON_FAIL=0.
   (( ${FX_AI_ON_FAIL:-1} )) || return
-  [[ -n "$OPENROUTER_API_KEY" ]] || return
+  _fx_ai_ready || return
   (( $#w >= 2 )) || return
   (( ${_FX_MULTICMD[(Ie)$w[1]]} )) || return
   _fx_ai_resolve "fix this failed command: $_FX_LASTFAIL"
@@ -193,46 +193,33 @@ add-zsh-hook precmd  _fx_precmd
 # Catch English sentences before builtins (where/which/find/…) execute them
 zle -N accept-line _fx_accept_line
 
-# ================= Stage 2: AI resolver (OpenRouter) =================
-# Needs: export OPENROUTER_API_KEY=sk-or-...
+# ================= Stage 2: AI resolver =================
+# Providers: openrouter (default) | opencode | codex | none
 # AI suggestion is confirmed via _fx_confirm_run (Enter / e / n).
-FX_MODEL=${FX_MODEL:-deepseek/deepseek-v4-flash}
+FX_PROVIDER=${FX_PROVIDER:-openrouter}
 
-_fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
-  curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
-    https://openrouter.ai/api/v1/chat/completions \
-    -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-    -H "Content-Type: application/json" -d "$1"
+_fx_ai_sys_prompt() {
+  print -r -- "You translate user intent or broken shell commands into ONE correct shell command line for their machine. Reply with ONLY the command on the first line — no markdown fences, no backticks, no explanation, no thinking, do not run anything. Use the user's own aliases when they fit. If the action is destructive or irreversible, prefix with: # DANGER: "
 }
 
-_fx_ai() {  # $* = intent or failed command -> prints one suggested command
+_fx_ai_user_payload() {  # $* = intent
   local ctx="OS: $(uname -sm); shell: zsh; cwd: $PWD; files here: $(ls -1 2>/dev/null | head -15 | tr '\n' ' ')"
   local als=$(alias 2>/dev/null | head -30)
-  local intent="$*" body
-  body=$(FX_CTX="$ctx" FX_ALS="$als" FX_INTENT="$intent" FX_MODEL="$FX_MODEL" python3 <<'PY'
-import json, os
-sys_p = (
-    "You translate user intent or broken shell commands into ONE correct "
-    "shell command line for their machine. Reply with ONLY the command on the "
-    "first line — no markdown fences, no backticks, no explanation, no thinking. "
-    "Use the user's own aliases when they fit. "
-    "If the action is destructive or irreversible, prefix with: # DANGER: "
-)
-print(json.dumps({
-    "model": os.environ["FX_MODEL"],
-    "max_tokens": 800,
-    "messages": [
-        {"role": "system", "content": sys_p},
-        {"role": "user", "content": (
-            os.environ["FX_CTX"] + "\nMy aliases:\n" + os.environ["FX_ALS"]
-            + "\nTask/failed input: " + os.environ["FX_INTENT"]
-        )},
-    ],
-}))
-PY
-)
-  # -c gets the script via command substitution; stdin stays as the API response pipe
-  _fx_ai_http "$body" | python3 -c "$(cat <<'PY'
+  print -r -- "${ctx}"$'\n'"My aliases:"$'\n'"${als}"$'\n'"Task/failed input: $*"
+}
+
+_fx_ai_ready() {
+  case "${FX_PROVIDER:-openrouter}" in
+    openrouter) [[ -n "${OPENROUTER_API_KEY:-}" ]] ;;
+    opencode)   command -v opencode >/dev/null 2>&1 ;;
+    codex)      command -v codex >/dev/null 2>&1 ;;
+    none|off|local|"") return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+_fx_ai_extract() {  # stdin: free text or OpenRouter JSON -> one command on stdout
+  python3 -c "$(cat <<'PY'
 import json, sys, re
 HEADS = {
     "find","ls","cd","cat","grep","rg","fd","mdfind","locate","open","git",
@@ -274,43 +261,153 @@ def extract(t):
             return ln
     return ""
 
-try:
-    r = json.load(sys.stdin)
-    if "error" in r:
-        err = r["error"]
-        msg = err.get("message", err) if isinstance(err, dict) else err
-        sys.stderr.write(f"AI error: {msg}\n")
-        sys.exit(0)
-    msg = (r.get("choices") or [{}])[0].get("message") or {}
-    t = msg.get("content")
-    if not (isinstance(t, str) and t.strip()):
-        parts = []
-        if isinstance(msg.get("reasoning"), str):
-            parts.append(msg["reasoning"])
-        for d in (msg.get("reasoning_details") or []):
-            if isinstance(d, dict) and d.get("text"):
-                parts.append(d["text"])
-        t = "\n".join(parts)
-    out = extract(t if isinstance(t, str) else "")
-    if out:
-        print(out)
-except Exception as e:
-    sys.stderr.write(f"AI parse error: {e}\n")
+raw = sys.stdin.read()
+if not raw.strip():
+    sys.exit(0)
+t = ""
+s = raw.strip()
+if s.startswith("{") or s.startswith("["):
+    try:
+        if s.startswith("["):
+            # JSONL / event stream: stitch text fields
+            parts = []
+            for line in raw.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(ev, dict):
+                    for k in ("text", "content", "message", "delta"):
+                        v = ev.get(k)
+                        if isinstance(v, str) and v.strip():
+                            parts.append(v)
+                        elif isinstance(v, dict):
+                            c = v.get("content") or v.get("text")
+                            if isinstance(c, str) and c.strip():
+                                parts.append(c)
+            t = "\n".join(parts) if parts else ""
+        else:
+            r = json.loads(s)
+            if isinstance(r, dict) and "error" in r:
+                err = r["error"]
+                msg = err.get("message", err) if isinstance(err, dict) else err
+                sys.stderr.write(f"AI error: {msg}\n")
+                sys.exit(0)
+            if isinstance(r, dict) and "choices" in r:
+                msg = (r.get("choices") or [{}])[0].get("message") or {}
+                t = msg.get("content")
+                if not (isinstance(t, str) and t.strip()):
+                    parts = []
+                    if isinstance(msg.get("reasoning"), str):
+                        parts.append(msg["reasoning"])
+                    for d in (msg.get("reasoning_details") or []):
+                        if isinstance(d, dict) and d.get("text"):
+                            parts.append(d["text"])
+                    t = "\n".join(parts)
+            elif isinstance(r, dict):
+                for k in ("text", "content", "message", "output"):
+                    v = r.get(k)
+                    if isinstance(v, str) and v.strip():
+                        t = v
+                        break
+    except Exception:
+        t = raw
+else:
+    t = raw
+out = extract(t if isinstance(t, str) else "")
+if out:
+    print(out)
 PY
 )"
 }
 
+_fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
+  curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
+    https://openrouter.ai/api/v1/chat/completions \
+    -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+    -H "Content-Type: application/json" -d "$1"
+}
+
+_fx_ai_openrouter() {  # $* = intent
+  local model="${FX_MODEL:-deepseek/deepseek-v4-flash}"
+  local sys_p user_p body
+  sys_p="$(_fx_ai_sys_prompt)"
+  user_p="$(_fx_ai_user_payload "$@")"
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 <<'PY'
+import json, os
+print(json.dumps({
+    "model": os.environ["FX_MODEL"],
+    "max_tokens": 800,
+    "messages": [
+        {"role": "system", "content": os.environ["FX_SYS"]},
+        {"role": "user", "content": os.environ["FX_USER"]},
+    ],
+}))
+PY
+)
+  _fx_ai_http "$body" | _fx_ai_extract
+}
+
+_fx_ai_opencode() {  # $* = intent
+  local prompt margs=()
+  prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
+  [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
+  opencode run "${margs[@]}" --format json -- "$prompt" 2>/dev/null | _fx_ai_extract
+}
+
+_fx_ai_codex() {  # $* = intent
+  local prompt out margs=()
+  prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
+  [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
+  out="$(mktemp)"
+  # last message only; ephemeral; allow outside git repos
+  if codex exec --ephemeral --skip-git-repo-check --color never \
+      -o "$out" "${margs[@]}" -- "$prompt" >/dev/null 2>&1; then
+    _fx_ai_extract <"$out"
+  else
+    # fallback: capture stdout if -o failed / older CLI
+    codex exec --ephemeral --skip-git-repo-check --color never \
+      "${margs[@]}" -- "$prompt" 2>/dev/null | _fx_ai_extract
+  fi
+  rm -f "$out"
+}
+
+_fx_ai() {  # $* = intent or failed command -> prints one suggested command
+  case "${FX_PROVIDER:-openrouter}" in
+    openrouter) _fx_ai_openrouter "$@" ;;
+    opencode)   _fx_ai_opencode "$@" ;;
+    codex)      _fx_ai_codex "$@" ;;
+    *) return 1 ;;
+  esac
+}
+
 # hook into the no-local-match branch of the not-found handler
 _fx_ai_resolve() {   # called with the full original line
-  if [[ -z "$OPENROUTER_API_KEY" ]]; then
-    print -u2 -P "%F{red}? set OPENROUTER_API_KEY for AI%f"
+  if ! _fx_ai_ready; then
+    case "${FX_PROVIDER:-openrouter}" in
+      openrouter)
+        print -u2 -P "%F{red}? set OPENROUTER_API_KEY for AI (or FX_PROVIDER=opencode|codex)%f"
+        ;;
+      opencode)
+        print -u2 -P "%F{red}? opencode not found on PATH%f"
+        ;;
+      codex)
+        print -u2 -P "%F{red}? codex not found on PATH%f"
+        ;;
+      *)
+        print -u2 -P "%F{red}? AI not configured (FX_PROVIDER=none)%f"
+        ;;
+    esac
     return 127
   fi
   print -u2 -P "%F{cyan}…resolving%f"
   local sug
   sug="$(_fx_ai "$@")"
   if [[ -z "$sug" ]]; then
-    print -u2 -P "%F{red}? AI gave no answer (timeout/network?)%f"
+    print -u2 -P "%F{red}? AI gave no answer (timeout/network/auth?)%f"
     return 127
   fi
   _fx_confirm_run "$sug" && return $?

@@ -4,6 +4,7 @@
  *   npx github:arjunagi-a-rehman/dum-tum
  *   npx fixit-zsh          (after published to npm)
  *   npx fixit-zsh --key sk-or-v1-...
+ *   npx fixit-zsh --provider opencode --model anthropic/claude-sonnet-4
  */
 const { spawnSync } = require("child_process");
 const fs = require("fs");
