@@ -69,6 +69,15 @@ check_rc "_fx_looks_like_nl path" 1 _fx_looks_like_nl list ./foo
 touch realfile
 check_rc "_fx_looks_like_nl existing file" 1 _fx_looks_like_nl show realfile
 
+# ---------- _fx_has_secrets ----------
+check_rc "_fx_has_secrets --password" 0 _fx_has_secrets 'curl --password=hunter2 x'
+check_rc "_fx_has_secrets --token space" 0 _fx_has_secrets 'git clone --token abc123'
+check_rc "_fx_has_secrets Bearer" 0 _fx_has_secrets 'curl -H "Authorization: Bearer abc.def.ghi"'
+check_rc "_fx_has_secrets sk- key" 0 _fx_has_secrets 'export OPENAI_API_KEY=sk-abcdefghijklmnop'
+check_rc "_fx_has_secrets KEY= env" 0 _fx_has_secrets 'OPENROUTER_API_KEY=zzz999'
+check_rc "_fx_has_secrets plain command" 1 _fx_has_secrets 'git psuh origin main'
+check_rc "_fx_has_secrets bare flag no value" 1 _fx_has_secrets 'curl --password'
+
 # ---------- _fx_redact_secrets ----------
 out=$(printf 'curl --password=hunter2 x\n' | _fx_redact_secrets)
 check_eq "redact --password=" 'curl --password=[REDACTED] x' "$out"

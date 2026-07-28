@@ -80,7 +80,7 @@ else
   _fx_all_commands() { { compgen -c; compgen -A function; compgen -a; compgen -b; } 2>/dev/null | sort -u; }
 fi
 
-# Confirm/run a suggestion. Enter = run · e = edit then run · n / Ctrl-C = cancel
+# Confirm/run a suggestion. Enter = run · e = edit then run · anything else = cancel
 _fx_confirm_run() {
   local cmd="$1" key
   [[ -z "$cmd" ]] && return 1
@@ -93,7 +93,7 @@ _fx_confirm_run() {
   fi
   printf '\n' >&2
   case "$key" in
-    $'\n'|$'\r'|'y'|'Y'|'')
+    $'\n'|$'\r')
       eval "$cmd"
       ;;
     e|E)
@@ -142,17 +142,13 @@ _fx_handle_not_found() {
   return 127
 }
 
-# Ask before auto-sending a failed command line to a third-party AI provider.
-_fx_confirm_ai_send() {
-  local key
-  printf '\033[33mSend this failed command to %s for a fix? [y/N] \033[0m' "${FX_PROVIDER:-openrouter}" >&2
-  if [[ -n "${ZSH_VERSION:-}" ]]; then
-    IFS= read -r -k 1 key </dev/tty || return 1
-  else
-    IFS= read -r -n 1 key </dev/tty || return 1
-  fi
-  printf '\n' >&2
-  [[ "$key" == y || "$key" == Y ]]
+# True when a line contains an obvious secret shape — those are never sent to AI.
+_fx_has_secrets() {
+  printf '%s' "$1" | grep -Eq \
+    -e '(--password|--passwd|--token)(=|[[:space:]])[^[:space:]]' \
+    -e 'Bearer[[:space:]]+[A-Za-z0-9._~+-]+' \
+    -e 'sk-[A-Za-z0-9_-]{8,}' \
+    -e '[A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*=[^[:space:]'"'"']'
 }
 
 # Shared failed-command logic. $1 = exit code, rest = words of the failed line.
@@ -191,7 +187,10 @@ _fx_fix_failed_line() {
   _fx_ai_ready || return
   (( $# >= 2 )) || return
   _fx_in_list "$1" "${_FX_MULTICMD[@]}" || return
-  _fx_confirm_ai_send || return
+  if _fx_has_secrets "$_FX_LASTFAIL"; then
+    printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
+    return
+  fi
   _fx_ai_resolve "fix this failed command: $_FX_LASTFAIL"
 }
 
@@ -359,4 +358,11 @@ _fx_ai_resolve() {   # called with the full original line
 }
 
 # `fix` — send the last failed command for a corrected version
-fix() { [[ -z "$_FX_LASTFAIL" ]] && { echo "nothing failed recently"; return; }; _fx_ai_resolve "fix this failed command: $_FX_LASTFAIL"; }
+fix() {
+  [[ -z "$_FX_LASTFAIL" ]] && { echo "nothing failed recently"; return; }
+  if _fx_has_secrets "$_FX_LASTFAIL"; then
+    printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
+    return 1
+  fi
+  _fx_ai_resolve "fix this failed command: $_FX_LASTFAIL"
+}
