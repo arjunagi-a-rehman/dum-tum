@@ -40,8 +40,9 @@ print(str(bd)+"\t"+(best or ""))' "$1"
 
 _fx_ok() { local _max="${3:-1}"; (( $1 <= _max && $1 * 2 < $2 + 2 )); }  # $1=dist $2=len $3=max dist
 
-# Never auto-run these — too destructive if the fuzzy match picks wrong.
-_FX_DANGEROUS=(rm rmdir dd kill pkill killall shutdown reboot halt mkfs fdisk diskutil sudo su chmod chown shred)
+# Auto-run gate (allowlist): only these read-only commands run without a
+# confirm prompt. Anything else — destructive or not — asks first.
+_FX_AUTORUN_SAFE=(ls pwd echo which type date whoami cat head tail wc stat file less more man)
 
 # Only read-only commands where re-running is guaranteed safe.
 _FX_SAFE=(cd cat ls less more head tail wc stat file vim nano vi bat open code)
@@ -121,16 +122,16 @@ _fx_handle_not_found() {
   out=$(_fx_all_commands | _fx_best "$cmd")
   d=${out%%$'\t'*}; best=${out#*$'\t'}
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
-    if _fx_in_list "$best" "${_FX_DANGEROUS[@]}"; then
-      printf '\033[33m? %s not found — closest: %s (not auto-running)\033[0m\n' "'$cmd'" "$best" >&2
-      _fx_confirm_run "$best${*:+ $*}" && return $?
-    else
+    if _fx_in_list "$best" "${_FX_AUTORUN_SAFE[@]}"; then
       printf '\033[33m↻ %s → %s\033[0m\n' "$cmd" "$best" >&2
       if "$best" "$@"; then
         return 0
       fi
       # Fuzzy guess was wrong — fall back to AI on original line
       _fx_ai_resolve "$full"; return $?
+    else
+      printf '\033[33m? %s not found — closest: %s (not auto-running)\033[0m\n' "'$cmd'" "$best" >&2
+      _fx_confirm_run "$best${*:+ $*}" && return $?
     fi
   elif (( $# == 0 )) && [[ -n "$best" && $d -le 2 ]]; then
     printf '\033[33m? %s not found — closest: %s\033[0m\n' "'$cmd'" "$best" >&2
@@ -139,6 +140,19 @@ _fx_handle_not_found() {
     _fx_ai_resolve "$full"; return $?
   fi
   return 127
+}
+
+# Ask before auto-sending a failed command line to a third-party AI provider.
+_fx_confirm_ai_send() {
+  local key
+  printf '\033[33mSend this failed command to %s for a fix? [y/N] \033[0m' "${FX_PROVIDER:-openrouter}" >&2
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    IFS= read -r -k 1 key </dev/tty || return 1
+  else
+    IFS= read -r -n 1 key </dev/tty || return 1
+  fi
+  printf '\n' >&2
+  [[ "$key" == y || "$key" == Y ]]
 }
 
 # Shared failed-command logic. $1 = exit code, rest = words of the failed line.
@@ -177,6 +191,7 @@ _fx_fix_failed_line() {
   _fx_ai_ready || return
   (( $# >= 2 )) || return
   _fx_in_list "$1" "${_FX_MULTICMD[@]}" || return
+  _fx_confirm_ai_send || return
   _fx_ai_resolve "fix this failed command: $_FX_LASTFAIL"
 }
 
@@ -188,11 +203,26 @@ _fx_ai_sys_prompt() {
   printf '%s' "You translate user intent or broken shell commands into ONE correct shell command line for their machine. Reply with ONLY the command on the first line — no markdown fences, no backticks, no explanation, no thinking, do not run anything. Use the user's own aliases when they fit. If the action is destructive or irreversible, prefix with: # DANGER: "
 }
 
+# Mask common secret shapes before anything is sent to an AI provider.
+_fx_redact_secrets() {  # stdin -> stdout
+  sed -E \
+    -e 's/(--password|--passwd|--token)(=|[[:space:]]+)[^[:space:]]+/\1\2[REDACTED]/g' \
+    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+-]+/\1[REDACTED]/g' \
+    -e 's/sk-[A-Za-z0-9_-]{8,}/[REDACTED-KEY]/g' \
+    -e 's/([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*)=[^[:space:]'"'"']+/\1=[REDACTED]/g'
+}
+
+# Strip terminal control bytes (ANSI escapes, cursor moves) from untrusted text.
+_fx_strip_ctrl() {  # stdin -> stdout (keeps newline/tab)
+  tr -d '\000-\010\013-\037\177'
+}
+
 _fx_ai_user_payload() {  # $* = intent
-  local ctx als
-  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD; files here: $(ls -1 2>/dev/null | head -15 | tr '\n' ' ')"
-  als="$(alias 2>/dev/null | head -30)"
-  printf '%s\nMy aliases:\n%s\nTask/failed input: %s' "$ctx" "$als" "$*"
+  local ctx als task
+  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD; files here: $(ls -1 2>/dev/null | tr -d '[:cntrl:]' | head -15 | tr '\n' ' ')"
+  als="$(alias 2>/dev/null | _fx_strip_ctrl | head -30 | _fx_redact_secrets)"
+  task="$(printf '%s' "$*" | _fx_strip_ctrl | _fx_redact_secrets)"
+  printf '%s\nMy aliases:\n%s\nTask/failed input: %s' "$ctx" "$als" "$task"
 }
 
 _fx_shell_name() {
@@ -215,10 +245,17 @@ _fx_ai_extract() {  # stdin: free text or JSON/JSONL -> one command on stdout
 
 
 _fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
-  curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
-    https://openrouter.ai/api/v1/chat/completions \
-    -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-    -H "Content-Type: application/json" -d "$1"
+  # Key and body go via stdin/tempfile, never argv (ps-visible to local users).
+  local body_file rc
+  body_file="$(mktemp "${TMPDIR:-/tmp}/fixit-body.XXXXXX")" || return 1
+  printf '%s' "$1" > "$body_file"
+  printf 'header = "Authorization: Bearer %s"\n' "$OPENROUTER_API_KEY" | \
+    curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
+      -K - -H "Content-Type: application/json" --data-binary @"$body_file" \
+      https://openrouter.ai/api/v1/chat/completions
+  rc=$?
+  rm -f "$body_file"
+  return $rc
 }
 
 _fx_ai_openrouter() {  # $* = intent
@@ -312,7 +349,7 @@ _fx_ai_resolve() {   # called with the full original line
   fi
   printf '\033[36m…resolving\033[0m\n' >&2
   local sug
-  sug="$(_fx_ai "$@")"
+  sug="$(_fx_ai "$@" | _fx_strip_ctrl)"
   if [[ -z "$sug" ]]; then
     printf '\033[31m? AI gave no answer (timeout/network/auth?)\033[0m\n' >&2
     return 127

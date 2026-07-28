@@ -790,6 +790,13 @@ EOF
     info "Appending fixit block to $rc_file"
     printf '\n%s\n' "$block" >> "$rc_file"
   fi
+
+  # The block can contain OPENROUTER_API_KEY — never leave the file
+  # group/world-readable (stock ~/.bashrc from /etc/skel is 0644).
+  if [[ "$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null)" != "600" ]]; then
+    warn "$rc_file was readable by other users — tightening to 600 (key inside)"
+    chmod 600 "$rc_file"
+  fi
   ok "Configured $rc_file"
 }
 
