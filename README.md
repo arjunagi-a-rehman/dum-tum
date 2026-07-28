@@ -198,9 +198,13 @@ curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/inst
 ./install.sh --uninstall
 ```
 
-Then reload: `source ~/.zshrc`
+Then finish in that shell:
 
-This removes `~/.local/share/fixit` and the managed `# >>> fixit.zsh >>>` block from `~/.zshrc`.
+```bash
+source ~/.zshrc
+```
+
+This removes `~/.local/share/fixit`, replaces the managed zshrc block with a tiny cleanup that **unsets** `FX_PROVIDER` / `FX_MODEL` / `OPENROUTER_API_KEY` (so leftovers from the current session are cleared), and drops the shell hook. Re-install overwrites that cleanup block.
 
 ---
 

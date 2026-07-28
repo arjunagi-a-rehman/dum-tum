@@ -19,9 +19,13 @@ MARKER_END="# <<< fixit.zsh <<<"
 SELF="${BASH_SOURCE[0]:-$0}"
 SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || true)"
 
-API_KEY="${OPENROUTER_API_KEY:-}"
-PROVIDER="${FX_PROVIDER:-}"
-MODEL="${FX_MODEL:-}"
+# Values from CLI flags only (env is a non-interactive fallback — does not skip menus)
+API_KEY=""
+PROVIDER=""
+MODEL=""
+PROVIDER_FROM_CLI=0
+MODEL_FROM_CLI=0
+KEY_FROM_CLI=0
 ASSUME_YES=0
 SKIP_DEPS=0
 SKIP_AI_TEST=0
@@ -48,7 +52,7 @@ Options:
   --uninstall       Remove fixit.zsh and its ~/.zshrc block
   --help, -h        Show this help
 
-Env:
+Env (used when --yes / non-interactive; interactive always prompts):
   OPENROUTER_API_KEY   Same as --key
   FX_PROVIDER          Same as --provider
   FX_MODEL             Same as --model
@@ -59,12 +63,12 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --key) API_KEY="${2:-}"; shift 2 ;;
-    --key=*) API_KEY="${1#--key=}"; shift ;;
-    --provider) PROVIDER="${2:-}"; shift 2 ;;
-    --provider=*) PROVIDER="${1#--provider=}"; shift ;;
-    --model) MODEL="${2:-}"; shift 2 ;;
-    --model=*) MODEL="${1#--model=}"; shift ;;
+    --key) API_KEY="${2:-}"; KEY_FROM_CLI=1; shift 2 ;;
+    --key=*) API_KEY="${1#--key=}"; KEY_FROM_CLI=1; shift ;;
+    --provider) PROVIDER="${2:-}"; PROVIDER_FROM_CLI=1; shift 2 ;;
+    --provider=*) PROVIDER="${1#--provider=}"; PROVIDER_FROM_CLI=1; shift ;;
+    --model) MODEL="${2:-}"; MODEL_FROM_CLI=1; shift 2 ;;
+    --model=*) MODEL="${1#--model=}"; MODEL_FROM_CLI=1; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --skip-deps) SKIP_DEPS=1; shift ;;
     --skip-ai-test) SKIP_AI_TEST=1; shift ;;
@@ -73,6 +77,17 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage >&2; exit 1 ;;
   esac
 done
+
+# Env fills gaps only when not set by CLI
+if [[ "$KEY_FROM_CLI" -eq 0 && -n "${OPENROUTER_API_KEY:-}" ]]; then
+  API_KEY="$OPENROUTER_API_KEY"
+fi
+if [[ "$PROVIDER_FROM_CLI" -eq 0 && -n "${FX_PROVIDER:-}" ]]; then
+  PROVIDER="$FX_PROVIDER"
+fi
+if [[ "$MODEL_FROM_CLI" -eq 0 && -n "${FX_MODEL:-}" ]]; then
+  MODEL="$FX_MODEL"
+fi
 
 info()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
 ok()    { printf '\033[32m✓\033[0m %s\n' "$*"; }
@@ -203,26 +218,35 @@ normalize_provider() {
 # ---------- provider selection ----------
 select_provider() {
   local p
-  p="$(normalize_provider "$PROVIDER")"
-  if [[ -n "$p" ]]; then
+  # Explicit CLI --provider always wins (interactive or not)
+  if [[ "$PROVIDER_FROM_CLI" -eq 1 ]]; then
+    p="$(normalize_provider "$PROVIDER")"
+    if [[ -z "$p" ]]; then
+      err "Invalid --provider: $PROVIDER"
+      exit 1
+    fi
     PROVIDER="$p"
-    ok "Provider: $PROVIDER"
+    ok "Provider: $PROVIDER (from --provider)"
     return 0
   fi
 
-  # already configured in zshrc?
-  if [[ -f "$ZSHRC" ]] && grep -qE '^\s*export FX_PROVIDER=' "$ZSHRC" 2>/dev/null; then
-    local existing
-    existing="$(grep -E '^\s*export FX_PROVIDER=' "$ZSHRC" | tail -1 | sed -E 's/.*FX_PROVIDER=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
-    existing="$(normalize_provider "$existing")"
-    if [[ -n "$existing" ]] && ! is_interactive; then
-      PROVIDER="$existing"
-      ok "Keeping existing FX_PROVIDER=$PROVIDER from $ZSHRC"
+  if ! is_interactive; then
+    p="$(normalize_provider "$PROVIDER")"
+    if [[ -n "$p" ]]; then
+      PROVIDER="$p"
+      ok "Provider: $PROVIDER"
       return 0
     fi
-  fi
-
-  if ! is_interactive; then
+    if [[ -f "$ZSHRC" ]] && grep -qE '^\s*export FX_PROVIDER=' "$ZSHRC" 2>/dev/null; then
+      local existing
+      existing="$(grep -E '^\s*export FX_PROVIDER=' "$ZSHRC" | tail -1 | sed -E 's/.*FX_PROVIDER=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+      existing="$(normalize_provider "$existing")"
+      if [[ -n "$existing" ]]; then
+        PROVIDER="$existing"
+        ok "Keeping existing FX_PROVIDER=$PROVIDER from $ZSHRC"
+        return 0
+      fi
+    fi
     if [[ -n "$API_KEY" ]]; then
       PROVIDER="openrouter"
     elif [[ "$HAVE_OPENCODE" -eq 1 ]]; then
@@ -237,28 +261,42 @@ select_provider() {
     return 0
   fi
 
+  # Interactive: always ask (env/zshrc only seed the default choice)
+  local hint=""
+  p="$(normalize_provider "$PROVIDER")"
+  [[ -z "$p" && -f "$ZSHRC" ]] && p="$(normalize_provider "$(grep -E '^\s*export FX_PROVIDER=' "$ZSHRC" 2>/dev/null | tail -1 | sed -E 's/.*FX_PROVIDER=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')")"
+  [[ -n "$p" ]] && hint="$p"
+
   echo ""
   info "Choose AI backend for natural language / fix"
   local -a labels=() values=()
-  local i=1
+  local i=1 default=1
   if [[ "$HAVE_OPENCODE" -eq 1 ]]; then
     printf "  [%d] OpenCode  (uses your local opencode auth)\n" "$i"
-    labels+=("OpenCode"); values+=("opencode"); i=$((i+1))
+    labels+=("OpenCode"); values+=("opencode")
+    [[ "$hint" == "opencode" ]] && default=$i
+    i=$((i+1))
   fi
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     printf "  [%d] Codex CLI (uses your local codex auth)\n" "$i"
-    labels+=("Codex CLI"); values+=("codex"); i=$((i+1))
+    labels+=("Codex CLI"); values+=("codex")
+    [[ "$hint" == "codex" ]] && default=$i
+    i=$((i+1))
   fi
   printf "  [%d] OpenRouter API key\n" "$i"
-  labels+=("OpenRouter"); values+=("openrouter"); i=$((i+1))
+  labels+=("OpenRouter"); values+=("openrouter")
+  [[ "$hint" == "openrouter" ]] && default=$i
+  i=$((i+1))
   printf "  [%d] Skip AI (local typos only)\n" "$i"
   labels+=("Skip"); values+=("none")
+  [[ "$hint" == "none" ]] && default=$i
 
   if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CODEX" -eq 0 ]]; then
     echo "  (tip: install opencode or codex CLI, then re-run to use them)"
   fi
+  [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
 
-  local choice default=1
+  local choice
   printf "Select [1-%d] (default %d): " "${#values[@]}" "$default"
   read_tty choice
   choice="${choice:-$default}"
@@ -275,33 +313,47 @@ select_provider() {
 maybe_ask_key() {
   [[ "$PROVIDER" == "openrouter" ]] || return 0
 
-  if [[ -n "$API_KEY" ]]; then
-    ok "OpenRouter API key provided"
+  # Explicit --key wins
+  if [[ "$KEY_FROM_CLI" -eq 1 && -n "$API_KEY" ]]; then
+    ok "OpenRouter API key provided (from --key)"
     return 0
   fi
-  if grep -qE '^\s*export OPENROUTER_API_KEY=.+' "$ZSHRC" 2>/dev/null; then
-    # pull existing key so test/write can use it
-    API_KEY="$(grep -E '^\s*export OPENROUTER_API_KEY=' "$ZSHRC" | tail -1 | sed -E 's/.*OPENROUTER_API_KEY=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+
+  if ! is_interactive; then
+    if [[ -z "$API_KEY" ]] && grep -qE '^\s*export OPENROUTER_API_KEY=.+' "$ZSHRC" 2>/dev/null; then
+      API_KEY="$(grep -E '^\s*export OPENROUTER_API_KEY=' "$ZSHRC" | tail -1 | sed -E 's/.*OPENROUTER_API_KEY=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+    fi
     if [[ -n "$API_KEY" ]]; then
-      ok "OPENROUTER_API_KEY already set in $ZSHRC"
+      ok "OpenRouter API key provided"
       return 0
     fi
-  fi
-  if ! is_interactive; then
     warn "No OpenRouter key — AI will not work until you set OPENROUTER_API_KEY."
     PROVIDER="none"
     return 0
   fi
+
+  local hint=""
+  [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
+  if [[ -z "$hint" ]] && grep -qE '^\s*export OPENROUTER_API_KEY=.+' "$ZSHRC" 2>/dev/null; then
+    hint="(key already in zshrc — Enter keeps it, or paste a new one)"
+    API_KEY="$(grep -E '^\s*export OPENROUTER_API_KEY=' "$ZSHRC" | tail -1 | sed -E 's/.*OPENROUTER_API_KEY=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+  fi
+
   echo ""
   echo "OpenRouter API key enables natural language."
   echo "Get one at: https://openrouter.ai/keys"
-  printf "Paste key now (or press Enter to skip AI): "
-  read_tty API_KEY
-  if [[ -z "$API_KEY" ]]; then
+  [[ -n "$hint" ]] && echo "  $hint"
+  printf "Paste key now (Enter = keep/skip): "
+  local typed=""
+  read_tty typed
+  if [[ -n "$typed" ]]; then
+    API_KEY="$typed"
+    ok "API key saved for config"
+  elif [[ -n "$API_KEY" ]]; then
+    ok "Keeping existing OpenRouter API key"
+  else
     warn "No key — skipping AI."
     PROVIDER="none"
-  else
-    ok "API key saved for config"
   fi
 }
 
@@ -309,24 +361,31 @@ maybe_ask_key() {
 select_model() {
   [[ "$PROVIDER" == "none" ]] && { MODEL=""; return 0; }
 
-  if [[ -n "$MODEL" ]]; then
-    ok "Model: $MODEL"
+  # Explicit CLI --model always wins
+  if [[ "$MODEL_FROM_CLI" -eq 1 ]]; then
+    ok "Model: ${MODEL:-"(provider default)"} (from --model)"
     return 0
   fi
 
   if ! is_interactive; then
-    case "$PROVIDER" in
-      openrouter) MODEL="deepseek/deepseek-v4-flash" ;;
-      opencode|codex) MODEL="" ;;  # CLI default
-    esac
+    if [[ -z "$MODEL" ]]; then
+      case "$PROVIDER" in
+        openrouter) MODEL="deepseek/deepseek-v4-flash" ;;
+        opencode|codex) MODEL="" ;;
+      esac
+    fi
     [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (provider default)"
     return 0
   fi
 
+  # Interactive: always ask; pre-select env/previous model when listed
+  local hint="$MODEL"
+  MODEL=""
+
   echo ""
   info "Choose model for $PROVIDER"
   local -a models=()
-  local i=1 choice custom
+  local i=1 choice custom default=1
 
   case "$PROVIDER" in
     openrouter)
@@ -338,42 +397,39 @@ select_model() {
       )
       ;;
     opencode)
-      # try live list; fall back to common ids
       local listed
-      listed="$(opencode models 2>/dev/null | head -20 || true)"
+      listed="$(opencode models 2>/dev/null | head -40 || true)"
       if [[ -n "$listed" ]]; then
         while IFS= read -r line; do
           line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
-          [[ -z "$line" || "$line" == *"model"* && "$line" == *"provider"* ]] && continue
-          # take first token that looks like provider/model
+          [[ -z "$line" ]] && continue
           local tok
           tok="$(echo "$line" | awk '{print $1}')"
           [[ "$tok" == */* ]] && models+=("$tok")
-          (( ${#models[@]} >= 8 )) && break
+          (( ${#models[@]} >= 12 )) && break
         done <<<"$listed"
       fi
       if [[ ${#models[@]} -eq 0 ]]; then
         models=(
-          "opencode/grok-code"
+          "opencode/big-pickle"
+          "opencode-go/deepseek-v4-flash"
           "anthropic/claude-sonnet-4"
           "openai/gpt-4o-mini"
-          "google/gemini-2.5-flash"
         )
       fi
       ;;
     codex)
-      # ChatGPT-auth Codex rejects many API model ids (e.g. o4-mini).
-      # Prefer CLI default; custom only if the user knows a valid id.
       printf "  [1] (Codex default — recommended)\n"
       printf "  [2] Custom model id…\n"
+      [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
       printf "Select [1-2] (default 1): "
       read_tty choice
       choice="${choice:-1}"
       case "$choice" in
         2)
-          printf "Model id (must be allowed for your Codex login): "
+          printf "Model id (must be allowed for your Codex login) [%s]: " "${hint:-}"
           read_tty custom
-          MODEL="$custom"
+          MODEL="${custom:-$hint}"
           ;;
         *) MODEL="" ;;
       esac
@@ -384,21 +440,23 @@ select_model() {
 
   for m in "${models[@]}"; do
     printf "  [%d] %s\n" "$i" "$m"
+    [[ -n "$hint" && "$m" == "$hint" ]] && default=$i
     i=$((i+1))
   done
   printf "  [%d] Custom…\n" "$i"
   local max=$i
-  printf "Select [1-%d] (default 1): " "$max"
+  [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
+  printf "Select [1-%d] (default %d): " "$max" "$default"
   read_tty choice
-  choice="${choice:-1}"
+  choice="${choice:-$default}"
   if [[ "$choice" == "$max" ]]; then
-    printf "Model id: "
+    printf "Model id [%s]: " "${hint:-}"
     read_tty custom
-    MODEL="$custom"
+    MODEL="${custom:-$hint}"
   elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice < max )); then
     MODEL="${models[$((choice-1))]}"
   else
-    MODEL="${models[0]}"
+    MODEL="${models[$((default-1))]:-${models[0]}}"
   fi
   ok "Model: $MODEL"
 }
@@ -599,19 +657,37 @@ uninstall_fixit() {
   info "Uninstalling fixit.zsh…"
   local removed=0
 
-  if [[ -f "$ZSHRC" ]] && grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
+  # Leave a tiny marker block that unsets exports so `source ~/.zshrc`
+  # clears leftovers in the *current* shell (child process can't unset parent env).
+  # Re-install replaces this block with the real config.
+  local cleanup
+  cleanup=$(cat <<EOF
+$MARKER_BEGIN
+# fixit uninstalled — clear leftover exports when you: source ~/.zshrc
+unset FX_PROVIDER FX_MODEL OPENROUTER_API_KEY 2>/dev/null || true
+$MARKER_END
+EOF
+)
+
+  touch "$ZSHRC"
+  if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
     local tmp
     tmp="$(mktemp)"
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
-      $0 == begin { skip=1; next }
+    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v repl="$cleanup" '
+      $0 == begin { print repl; skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
     ' "$ZSHRC" > "$tmp"
+    if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
+      printf '\n%s\n' "$cleanup" >> "$tmp"
+    fi
     mv "$tmp" "$ZSHRC"
-    ok "Removed fixit block from $ZSHRC"
+    ok "Updated $ZSHRC (removed config; clears FX_* on source)"
     removed=1
   else
-    warn "No fixit block found in $ZSHRC"
+    printf '\n%s\n' "$cleanup" >> "$ZSHRC"
+    ok "Added cleanup block to $ZSHRC (clears FX_* on source)"
+    removed=1
   fi
 
   if [[ -e "$INSTALL_DIR" ]]; then
@@ -627,8 +703,10 @@ uninstall_fixit() {
   else
     ok "fixit.zsh uninstalled"
     echo ""
-    echo "Reload your shell:  source $ZSHRC"
-    echo "Or open a new terminal tab."
+    echo "Finish cleanup in this shell:"
+    echo "  source $ZSHRC"
+    echo ""
+    echo "That unsets FX_PROVIDER, FX_MODEL, OPENROUTER_API_KEY and drops the hook."
   fi
 }
 
