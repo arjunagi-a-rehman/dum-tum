@@ -406,6 +406,8 @@ _fx_ai_opencode() {  # $* = intent
   local prompt margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
+  # FX_VARIANT = reasoning effort (e.g. low/medium/high) when the model supports it
+  [[ -n "${FX_VARIANT:-}" ]] && margs+=(--variant "$FX_VARIANT")
   _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run "${margs[@]}" --format json -- "$prompt" | _fx_ai_extract
 }
 
@@ -413,6 +415,8 @@ _fx_ai_codex() {  # $* = intent
   local prompt out margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
+  # FX_VARIANT = reasoning effort; codex reads it as a config override
+  [[ -n "${FX_VARIANT:-}" ]] && margs+=(-c "model_reasoning_effort=\"$FX_VARIANT\"")
   out="$(mktemp)"
   # last message only; ephemeral; allow outside git repos
   # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
