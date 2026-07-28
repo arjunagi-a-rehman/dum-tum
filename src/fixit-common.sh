@@ -214,7 +214,7 @@ _fx_redact_secrets() {  # stdin -> stdout
 
 # Strip terminal control bytes (ANSI escapes, cursor moves) from untrusted text.
 _fx_strip_ctrl() {  # stdin -> stdout (keeps newline/tab)
-  tr -d '\000-\010\013-\037\177'
+  sed -E $'s/\033\\[[0-9;]*[A-Za-z]//g' | tr -d '\000-\010\013-\037\177'
 }
 
 _fx_ai_user_payload() {  # $* = intent

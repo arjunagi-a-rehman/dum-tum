@@ -4,6 +4,7 @@
 import importlib.util
 import json
 import os
+import sys
 import unittest
 from pathlib import Path
 
@@ -26,6 +27,21 @@ class TestHeadOf(unittest.TestCase):
     def test_empty(self):
         self.assertEqual(fixit_ai.head_of(""), "")
         self.assertEqual(fixit_ai.head_of("   "), "")
+
+    def test_sudo_multiple_spaces(self):
+        self.assertEqual(fixit_ai.head_of("sudo    apt update"), "apt")
+
+    def test_sudo_with_path(self):
+        self.assertEqual(fixit_ai.head_of("sudo /bin/rm -f x"), "rm")
+
+    def test_leading_whitespace_and_tabs(self):
+        self.assertEqual(fixit_ai.head_of("\t  git\tstatus"), "git")
+
+    def test_sudo_only(self):
+        self.assertEqual(fixit_ai.head_of("sudo"), "sudo")
+
+    def test_sudo_no_args(self):
+        self.assertEqual(fixit_ai.head_of("sudo "), "sudo")
 
 
 class TestExtract(unittest.TestCase):
@@ -56,6 +72,58 @@ class TestExtract(unittest.TestCase):
     def test_url_in_backticks_ignored(self):
         out = fixit_ai.extract("`https://example.com/docs`")
         self.assertEqual(out, "")
+
+    def test_fence_with_language_and_surrounding_prose(self):
+        out = fixit_ai.extract("Sure! Here you go:\n```sh\ngit status\n```\nHope that helps")
+        self.assertEqual(out, "git status")
+
+    def test_last_backtick_candidate_wins(self):
+        out = fixit_ai.extract("Run `ls -la` or better `git status`")
+        self.assertEqual(out, "git status")
+
+    def test_backtick_unknown_head_with_space_accepted(self):
+        out = fixit_ai.extract("try `gcloud compute instances list` now")
+        self.assertEqual(out, "gcloud compute instances list")
+
+    def test_backtick_single_word_unknown_head_rejected(self):
+        out = fixit_ai.extract("the `foobar` command")
+        self.assertEqual(out, "")
+
+    def test_backtick_quotes_stripped(self):
+        out = fixit_ai.extract('use `"ls -la"` here')
+        self.assertEqual(out, "ls -la")
+
+    def test_unknown_head_multiline_fallback(self):
+        out = fixit_ai.extract("gcloud compute instances list")
+        self.assertEqual(out, "gcloud compute instances list")
+
+    def test_single_word_unknown_head_returns_empty(self):
+        self.assertEqual(fixit_ai.extract("blahblah"), "")
+
+    def test_prose_variants_skipped(self):
+        out = fixit_ai.extract("We can fix this\nUse the following\nls -la")
+        self.assertEqual(out, "ls -la")
+
+    def test_prose_case_insensitive(self):
+        out = fixit_ai.extract("THE answer is\nls -la")
+        self.assertEqual(out, "ls -la")
+
+    def test_danger_without_following_command(self):
+        out = fixit_ai.extract("# DANGER: deletes everything")
+        self.assertEqual(out, "# DANGER: deletes everything")
+
+    def test_danger_not_first_line(self):
+        out = fixit_ai.extract("Here is the fix\n# DANGER: wipes data\nrm -rf /tmp/x")
+        self.assertEqual(out, "# DANGER: wipes data\nrm -rf /tmp/x")
+
+    def test_whitespace_only_input(self):
+        self.assertEqual(fixit_ai.extract("   \n\t\n  "), "")
+
+    def test_unclosed_fence(self):
+        self.assertEqual(fixit_ai.extract("```bash\nls -la"), "ls -la")
+
+    def test_lines_with_backticks_stripped(self):
+        self.assertEqual(fixit_ai.extract("`git status`"), "git status")
 
 
 class TestParsePayload(unittest.TestCase):
@@ -91,6 +159,96 @@ class TestParsePayload(unittest.TestCase):
         raw = "{not valid json"
         self.assertEqual(fixit_ai.parse_payload(raw), raw)
 
+    def test_error_string_payload(self):
+        body = json.dumps({"error": "rate limited"})
+        self.assertEqual(fixit_ai.parse_payload(body), "")
+
+    def test_error_with_choices_not_treated_as_error(self):
+        body = json.dumps({
+            "error": {"message": "partial"},
+            "choices": [{"message": {"content": "ls -la"}}],
+        })
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+
+    def test_jsonl_error_midstream_aborts(self):
+        lines = "\n".join([
+            json.dumps({"text": "ls"}),
+            json.dumps({"error": {"message": "boom"}}),
+        ])
+        self.assertEqual(fixit_ai.parse_payload(lines), "")
+
+    def test_jsonl_multiple_json_no_text_returns_empty(self):
+        lines = "\n".join([
+            json.dumps({"id": 1}),
+            json.dumps({"id": 2}),
+        ])
+        self.assertEqual(fixit_ai.parse_payload(lines), "")
+
+    def test_json_array_payload(self):
+        body = json.dumps([{"text": "git"}, {"text": " status"}])
+        self.assertEqual(fixit_ai.parse_payload(body), "git\n status")
+
+    def test_choices_empty_content_falls_back_to_collect(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": "  ", "reasoning": "ls -la"}}]
+        })
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+
+    def test_choices_missing_message(self):
+        body = json.dumps({"choices": [{}]})
+        self.assertEqual(fixit_ai.parse_payload(body), "")
+
+    def test_empty_choices_array(self):
+        body = json.dumps({"choices": []})
+        self.assertEqual(fixit_ai.parse_payload(body), "")
+
+    def test_nested_content_dict(self):
+        body = json.dumps({"message": {"content": {"text": "pwd"}}})
+        self.assertEqual(fixit_ai.parse_payload(body), "pwd")
+
+    def test_reasoning_details_collected(self):
+        body = json.dumps({"reasoning_details": [{"text": "ls -la"}]})
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+
+    def test_part_content_key(self):
+        line = json.dumps({"part": {"content": "mkdir foo"}})
+        self.assertEqual(fixit_ai.parse_payload(line), "mkdir foo")
+
+    def test_non_json_mixed_lines_passthrough(self):
+        raw = "some prose\nls -la"
+        self.assertEqual(fixit_ai.parse_payload(raw), raw)
+
+    def test_scalar_json_returned_raw(self):
+        raw = "123"
+        self.assertEqual(fixit_ai.parse_payload(raw), raw)
+
+
+class TestCollectText(unittest.TestCase):
+    def test_plain_string(self):
+        parts = []
+        fixit_ai.collect_text("hello", parts)
+        self.assertEqual(parts, ["hello"])
+
+    def test_blank_strings_ignored(self):
+        parts = []
+        fixit_ai.collect_text("   ", parts)
+        self.assertEqual(parts, [])
+
+    def test_nested_list(self):
+        parts = []
+        fixit_ai.collect_text([{"text": "a"}, ["b", {"content": "c"}]], parts)
+        self.assertEqual(parts, ["a", "b", "c"])
+
+    def test_non_string_scalars_ignored(self):
+        parts = []
+        fixit_ai.collect_text({"text": 42, "content": None, "ok": True}, parts)
+        self.assertEqual(parts, [])
+
+    def test_delta_streaming_shape(self):
+        parts = []
+        fixit_ai.collect_text({"delta": {"content": "ls"}}, parts)
+        self.assertEqual(parts, ["ls"])
+
 
 class TestBodyCommand(unittest.TestCase):
     def test_body_json_structure(self):
@@ -109,6 +267,64 @@ class TestBodyCommand(unittest.TestCase):
         self.assertEqual(body["max_tokens"], 800)
         self.assertEqual(body["messages"][0], {"role": "system", "content": "sys prompt"})
         self.assertEqual(body["messages"][1], {"role": "user", "content": "user prompt"})
+
+
+class TestExtractCommand(unittest.TestCase):
+    def _run_extract(self, stdin_text):
+        import io
+        from contextlib import redirect_stdout
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO(stdin_text)
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                fixit_ai.cmd_extract()
+        finally:
+            sys.stdin = old_stdin
+        return buf.getvalue()
+
+    def test_extract_plain(self):
+        self.assertEqual(self._run_extract("ls -la\n"), "ls -la\n")
+
+    def test_extract_json_payload(self):
+        body = json.dumps({"choices": [{"message": {"content": "git status"}}]})
+        self.assertEqual(self._run_extract(body), "git status\n")
+
+    def test_extract_no_command_prints_nothing(self):
+        self.assertEqual(self._run_extract("just some prose"), "")
+
+    def test_extract_empty_stdin(self):
+        self.assertEqual(self._run_extract(""), "")
+
+
+class TestMain(unittest.TestCase):
+    def test_main_defaults_to_extract(self):
+        import io
+        from contextlib import redirect_stdout
+        old_argv, old_stdin = sys.argv, sys.stdin
+        sys.argv = ["fixit-ai.py"]
+        sys.stdin = io.StringIO("pwd\n")
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                fixit_ai.main()
+        finally:
+            sys.argv, sys.stdin = old_argv, old_stdin
+        self.assertEqual(buf.getvalue(), "pwd\n")
+
+    def test_main_body_mode(self):
+        import io
+        from contextlib import redirect_stdout
+        os.environ.update({"FX_MODEL": "m", "FX_SYS": "s", "FX_USER": "u"})
+        old_argv = sys.argv
+        sys.argv = ["fixit-ai.py", "body"]
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                fixit_ai.main()
+        finally:
+            sys.argv = old_argv
+        self.assertEqual(json.loads(buf.getvalue())["model"], "m")
 
 
 if __name__ == "__main__":
