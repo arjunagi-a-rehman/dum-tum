@@ -1,6 +1,6 @@
 {
   "name": "fixit-zsh",
-  "version": "1.0.0",
+  "version": "0.0.1",
   "description": "One-command installer for fixit.zsh — typo + AI shell helper for macOS and Ubuntu",
   "bin": {
     "fixit-zsh": "bin/fixit-zsh.js"
