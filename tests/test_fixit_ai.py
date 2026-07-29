@@ -214,6 +214,16 @@ class TestParsePayload(unittest.TestCase):
         line = json.dumps({"part": {"content": "mkdir foo"}})
         self.assertEqual(fixit_ai.parse_payload(line), "mkdir foo")
 
+    def test_claude_result_shape(self):
+        body = json.dumps({
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "ls -la",
+            "session_id": "abc123",
+        })
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+
     def test_non_json_mixed_lines_passthrough(self):
         raw = "some prose\nls -la"
         self.assertEqual(fixit_ai.parse_payload(raw), raw)

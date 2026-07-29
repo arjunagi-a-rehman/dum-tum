@@ -25,6 +25,8 @@
     "typo",
     "openrouter",
     "opencode",
+    "claude",
+    "claude-code",
     "codex",
     "cli",
     "fixit"

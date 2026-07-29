@@ -37,7 +37,7 @@ Every other terminal fixer makes you *ask* for help. That's the friction — you
 
 dum-tum hooks `accept-line` — the moment you press Enter, before your shell rejects anything. Typos get fixed locally and instantly. Plain English gets routed to AI. Everything else runs exactly as it always did.
 
-The second difference: **it doesn't demand another API key.** If you already have `opencode` or `codex` installed and logged in, dum-tum uses them. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
+The second difference: **it doesn't demand another API key.** If you already have `opencode`, `claude` (Claude Code), or `codex` installed and logged in, dum-tum uses them. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
 
 ---
 
@@ -72,7 +72,7 @@ Or without Node:
 curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 ```
 
-The installer detects your login shell, installs deps, finds `opencode`/`codex` on your PATH, lets you pick a provider and model, smoke-tests it, and writes your rc file. Then:
+The installer detects your login shell, installs deps, finds `opencode`/`claude`/`codex` on your PATH, lets you pick a provider and model, smoke-tests it, and writes your rc file. Then:
 
 ```bash
 source ~/.zshrc   # or open a new tab
@@ -104,7 +104,7 @@ This tool runs things in your shell. That deserves a straight answer about what 
 - **Local mode is fully offline.** Nothing leaves your machine, period.
 - **Keys don't hit the process table.** The OpenRouter key and request body go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
 
-One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call.
+One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. (The `claude` provider sends the prompt via stdin, so it is not `ps`-visible.)
 
 What AI mode sends: OS and shell, cwd, ~15 filenames, sample aliases, and what you typed. Don't paste secrets into natural-language prompts.
 
@@ -114,7 +114,7 @@ What AI mode sends: OS and shell, cwd, ~15 filenames, sample aliases, and what y
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `FX_PROVIDER` | `openrouter` | `openrouter` · `opencode` · `codex` · `none` |
+| `FX_PROVIDER` | `openrouter` | `openrouter` · `opencode` · `claude` · `codex` · `none` |
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
 | `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call is killed |
@@ -157,13 +157,13 @@ Enter pressed
 | `where is …` runs builtin `where` | update to latest — needs the accept-line hook |
 | `…resolving` then timeout | check network/VPN and provider auth; try another `FX_MODEL` |
 | Old behavior after update | `source ~/.zshrc` or re-run the installer |
-| `opencode`/`codex` not found | install the CLI and ensure it's on `PATH`, or switch to OpenRouter |
+| `opencode`/`claude`/`codex` not found | install the CLI and ensure it's on `PATH`, or switch to OpenRouter |
 
 Quick diagnostic:
 
 ```bash
 echo $SHELL; python3 --version; echo $FX_PROVIDER $FX_MODEL
-command -v opencode; command -v codex
+command -v opencode; command -v claude; command -v codex
 whence -w command_not_found_handler
 ```
 
