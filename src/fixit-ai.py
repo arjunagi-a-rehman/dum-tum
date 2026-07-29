@@ -76,7 +76,7 @@ def collect_text(obj: Any, parts: list) -> None:
             v = part.get(k)
             if isinstance(v, str) and v.strip():
                 parts.append(v)
-    for k in ("text", "content", "message", "delta", "output", "reasoning"):
+    for k in ("text", "content", "message", "delta", "output", "reasoning", "result"):
         v = obj.get(k)
         if isinstance(v, str) and v.strip():
             parts.append(v)

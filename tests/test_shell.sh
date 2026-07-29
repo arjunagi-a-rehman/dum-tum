@@ -147,6 +147,20 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   check_rc "_fx_ai_ready opencode on PATH" 0 _fx_ai_ready
 )
 (
+  FX_PROVIDER=claude
+  mkdir -p emptybin
+  PATH="$TMPD/emptybin:/usr/bin:/bin"
+  check_rc "_fx_ai_ready claude missing binary" 1 _fx_ai_ready
+)
+(
+  FX_PROVIDER=claude
+  mkdir -p bin
+  printf '#!/bin/sh\nexit 0\n' > bin/claude
+  chmod +x bin/claude
+  PATH="$TMPD/bin:$PATH"
+  check_rc "_fx_ai_ready claude on PATH" 0 _fx_ai_ready
+)
+(
   FX_PROVIDER=off
   check_rc "_fx_ai_ready off alias" 1 _fx_ai_ready
 )

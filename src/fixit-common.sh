@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # fixit-common.sh — shared core sourced by fixit.zsh and fixit.bash
 # Stage 1: local fuzzy matching (instant, offline)
-# Stage 2: AI resolver (OpenRouter / OpenCode / Codex)
+# Stage 2: AI resolver (OpenRouter / OpenCode / Claude / Codex)
 
 # Directory of this file (for fixit-ai.py)
 if [[ -n "${ZSH_VERSION:-}" ]]; then
@@ -198,7 +198,7 @@ _fx_fix_failed_line() {
 }
 
 # ================= Stage 2: AI resolver =================
-# Providers: openrouter (default) | opencode | codex | none
+# Providers: openrouter (default) | opencode | claude | codex | none
 FX_PROVIDER=${FX_PROVIDER:-openrouter}
 
 _fx_ai_sys_prompt() {
@@ -235,6 +235,7 @@ _fx_ai_ready() {
   case "${FX_PROVIDER:-openrouter}" in
     openrouter) [[ -n "${OPENROUTER_API_KEY:-}" ]] ;;
     opencode)   command -v opencode >/dev/null 2>&1 ;;
+    claude)     command -v claude >/dev/null 2>&1 ;;
     codex)      command -v codex >/dev/null 2>&1 ;;
     none|off|local|"") return 1 ;;
     *) return 1 ;;
@@ -303,6 +304,16 @@ _fx_ai_opencode() {  # $* = intent
   _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run "${margs[@]}" --format json -- "$prompt" | _fx_ai_extract
 }
 
+_fx_ai_claude() {  # $* = intent
+  local prompt margs=()
+  prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
+  [[ -n "${FX_MODEL:-}" ]] && margs+=(--model "$FX_MODEL")
+  [[ -n "${FX_VARIANT:-}" ]] && margs+=(--effort "$FX_VARIANT")
+  # Prompt via stdin so it is not visible in `ps` to other local users.
+  printf '%s' "$prompt" | _fx_timeout "${FX_AI_TIMEOUT:-90}" \
+    claude -p --output-format json --max-turns 1 "${margs[@]}" | _fx_ai_extract
+}
+
 _fx_ai_codex() {  # $* = intent
   local prompt out margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
@@ -326,6 +337,7 @@ _fx_ai() {  # $* = intent or failed command -> prints one suggested command
   case "${FX_PROVIDER:-openrouter}" in
     openrouter) _fx_ai_openrouter "$@" ;;
     opencode)   _fx_ai_opencode "$@" ;;
+    claude)     _fx_ai_claude "$@" ;;
     codex)      _fx_ai_codex "$@" ;;
     *) return 1 ;;
   esac
@@ -335,10 +347,13 @@ _fx_ai_resolve() {   # called with the full original line
   if ! _fx_ai_ready; then
     case "${FX_PROVIDER:-openrouter}" in
       openrouter)
-        printf '\033[31m? set OPENROUTER_API_KEY for AI (or FX_PROVIDER=opencode|codex)\033[0m\n' >&2
+        printf '\033[31m? set OPENROUTER_API_KEY for AI (or FX_PROVIDER=opencode|claude|codex)\033[0m\n' >&2
         ;;
       opencode)
         printf '\033[31m? opencode not found on PATH\033[0m\n' >&2
+        ;;
+      claude)
+        printf '\033[31m? claude not found on PATH\033[0m\n' >&2
         ;;
       codex)
         printf '\033[31m? codex not found on PATH\033[0m\n' >&2

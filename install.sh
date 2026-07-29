@@ -34,6 +34,7 @@ SKIP_AI_TEST=0
 DO_UNINSTALL=0
 
 HAVE_OPENCODE=0
+HAVE_CLAUDE=0
 HAVE_CODEX=0
 SHELL_CHOICE=""
 DO_ZSH=0
@@ -48,9 +49,9 @@ Usage:
   ./install.sh --uninstall
 
 Options:
-  --provider NAME   openrouter | opencode | codex | none
+  --provider NAME   openrouter | opencode | claude | codex | none
   --model ID        Model id for the chosen provider
-  --variant LEVEL   Reasoning effort (codex/opencode: low|medium|high|...)
+  --variant LEVEL   Reasoning effort (codex/opencode/claude: low|medium|high|...)
   --key KEY         OpenRouter API key (provider=openrouter)
   --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
@@ -242,11 +243,16 @@ install_script() {
 
 detect_ai_clis() {
   HAVE_OPENCODE=0
+  HAVE_CLAUDE=0
   HAVE_CODEX=0
   have opencode && HAVE_OPENCODE=1
+  have claude && HAVE_CLAUDE=1
   have codex && HAVE_CODEX=1
   if [[ "$HAVE_OPENCODE" -eq 1 ]]; then
     ok "Detected OpenCode CLI ($(command -v opencode))"
+  fi
+  if [[ "$HAVE_CLAUDE" -eq 1 ]]; then
+    ok "Detected Claude Code CLI ($(command -v claude))"
   fi
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     ok "Detected Codex CLI ($(command -v codex))"
@@ -257,6 +263,7 @@ normalize_provider() {
   case "${1:-}" in
     openrouter|or) echo openrouter ;;
     opencode|oc) echo opencode ;;
+    claude|cc) echo claude ;;
     codex|cx) echo codex ;;
     none|off|local|skip) echo none ;;
     "") echo "" ;;
@@ -300,6 +307,8 @@ select_provider() {
       PROVIDER="openrouter"
     elif [[ "$HAVE_OPENCODE" -eq 1 ]]; then
       PROVIDER="opencode"
+    elif [[ "$HAVE_CLAUDE" -eq 1 ]]; then
+      PROVIDER="claude"
     elif [[ "$HAVE_CODEX" -eq 1 ]]; then
       PROVIDER="codex"
     else
@@ -326,6 +335,12 @@ select_provider() {
     [[ "$hint" == "opencode" ]] && default=$i
     i=$((i+1))
   fi
+  if [[ "$HAVE_CLAUDE" -eq 1 ]]; then
+    printf "  [%d] Claude Code (uses your local claude auth)\n" "$i"
+    labels+=("Claude Code"); values+=("claude")
+    [[ "$hint" == "claude" ]] && default=$i
+    i=$((i+1))
+  fi
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     printf "  [%d] Codex CLI (uses your local codex auth)\n" "$i"
     labels+=("Codex CLI"); values+=("codex")
@@ -340,8 +355,8 @@ select_provider() {
   labels+=("Skip"); values+=("none")
   [[ "$hint" == "none" ]] && default=$i
 
-  if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CODEX" -eq 0 ]]; then
-    echo "  (tip: install opencode or codex CLI, then re-run to use them)"
+  if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CLAUDE" -eq 0 && "$HAVE_CODEX" -eq 0 ]]; then
+    echo "  (tip: install opencode, claude, or codex CLI, then re-run to use them)"
   fi
   [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
 
@@ -420,7 +435,7 @@ select_model() {
     if [[ -z "$MODEL" ]]; then
       case "$PROVIDER" in
         openrouter) MODEL="deepseek/deepseek-v4-flash" ;;
-        opencode|codex) MODEL="" ;;
+        opencode|claude|codex) MODEL="" ;;
       esac
     fi
     [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (provider default)"
@@ -466,6 +481,36 @@ select_model() {
           "openai/gpt-4o-mini"
         )
       fi
+      ;;
+    claude)
+      # No model-list command in the CLI; offer common aliases + default
+      models=("sonnet" "opus" "haiku")
+      printf "  [1] (Claude Code default — recommended)\n"
+      i=2
+      for m in "${models[@]}"; do
+        printf "  [%d] %s\n" "$i" "$m"
+        [[ -n "$hint" && "$m" == "$hint" ]] && default=$i
+        i=$((i+1))
+      done
+      printf "  [%d] Custom model id…\n" "$i"
+      local max=$i
+      [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
+      printf "Select [1-%d] (default %d): " "$max" "$default"
+      read_tty choice
+      choice="${choice:-$default}"
+      if [[ "$choice" == "1" ]]; then
+        MODEL=""
+      elif [[ "$choice" == "$max" ]]; then
+        printf "Model id or alias [%s]: " "${hint:-}"
+        read_tty custom
+        MODEL="${custom:-$hint}"
+      elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 2 && choice < max )); then
+        MODEL="${models[$((choice-2))]}"
+      else
+        MODEL=""
+      fi
+      [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (Claude default)"
+      return 0
       ;;
     codex)
       # Live catalog from the CLI (visibility=list only)
@@ -542,9 +587,9 @@ except Exception:
   ok "Model: $MODEL"
 }
 
-# ---------- reasoning effort (codex/opencode) ----------
+# ---------- reasoning effort (codex/opencode/claude) ----------
 select_variant() {
-  [[ "$PROVIDER" == "codex" || "$PROVIDER" == "opencode" ]] || { VARIANT=""; return 0; }
+  [[ "$PROVIDER" == "codex" || "$PROVIDER" == "opencode" || "$PROVIDER" == "claude" ]] || { VARIANT=""; return 0; }
 
   if [[ "$VARIANT_FROM_CLI" -eq 1 ]]; then
     ok "Reasoning: ${VARIANT:-"(model default)"} (from --variant)"
@@ -584,6 +629,9 @@ if pick:
       levels=("${clean[@]}")
     fi
     [[ ${#levels[@]} -eq 0 ]] && levels=(low medium high)
+  elif [[ "$PROVIDER" == "claude" ]]; then
+    # claude --effort levels
+    levels=(low medium high xhigh max)
   else
     # opencode --variant: provider-specific; low/medium/high are the common ones
     levels=(low medium high)
@@ -634,6 +682,10 @@ test_ai() {
   fi
   if [[ "$PROVIDER" == "opencode" && "$HAVE_OPENCODE" -eq 0 ]]; then
     warn "Skipping AI test (opencode missing)"
+    return 0
+  fi
+  if [[ "$PROVIDER" == "claude" && "$HAVE_CLAUDE" -eq 0 ]]; then
+    warn "Skipping AI test (claude missing)"
     return 0
   fi
   if [[ "$PROVIDER" == "codex" && "$HAVE_CODEX" -eq 0 ]]; then
@@ -741,7 +793,7 @@ write_rc_block() {
     vesc="${vesc//\"/\\\"}"
     variant_line="export FX_VARIANT=\"$vesc\""
   else
-    variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode)'
+    variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode/claude)'
   fi
 
   if [[ "$PROVIDER" == "openrouter" && -n "$API_KEY" ]]; then
@@ -837,6 +889,7 @@ print_next_steps() {
   case "${PROVIDER:-none}" in
     openrouter) ai_hint="OpenRouter ($MODEL)" ;;
     opencode)   ai_hint="OpenCode${MODEL:+ ($MODEL)}" ;;
+    claude)     ai_hint="Claude Code${MODEL:+ ($MODEL)}" ;;
     codex)      ai_hint="Codex${MODEL:+ ($MODEL)}" ;;
     *)          ai_hint="off (local typos only)" ;;
   esac
@@ -871,7 +924,7 @@ Try:
 
 Change provider later:
 
-  export FX_PROVIDER="opencode"   # or codex | openrouter | none
+  export FX_PROVIDER="opencode"   # or claude | codex | openrouter | none
   export FX_MODEL="..."
   # openrouter only:
   export OPENROUTER_API_KEY="sk-or-v1-..."
