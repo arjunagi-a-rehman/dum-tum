@@ -6,9 +6,9 @@
 $ sl
 # → runs ls
 
-$ where is the reno folder
+$ where is the com folder
 …resolving
-→ find . -type d -iname "*reno*"
+→ find . -type d -iname "*com*"
 [Enter] run  ·  [e] edit  ·  [n] cancel
 ```
 
