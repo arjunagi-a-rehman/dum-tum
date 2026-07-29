@@ -90,6 +90,7 @@ _fx_confirm_run() {
     IFS= read -r -k 1 key </dev/tty || return 1
   else
     IFS= read -r -n 1 key </dev/tty || return 1
+    [[ -z "$key" ]] && key=$'\n'
   fi
   printf '\n' >&2
   case "$key" in
