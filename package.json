@@ -1,6 +1,6 @@
 {
   "name": "dum-tum",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "One-command installer for fixit.zsh — typo + AI shell helper for macOS and Ubuntu",
   "bin": {
     "dum-tum": "bin/dum-tum.js"
