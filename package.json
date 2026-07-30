@@ -6,6 +6,7 @@
     "dum-tum": "bin/dum-tum.js"
   },
   "scripts": {
+    "postinstall": "node bin/postinstall.js",
     "install-fixit": "bash install.sh",
     "test": "bash tests/run-tests.sh"
   },
