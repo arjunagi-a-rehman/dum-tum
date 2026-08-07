@@ -133,6 +133,42 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   check_rc "_fx_ai_ready unknown provider" 1 _fx_ai_ready
 )
 (
+  FX_PROVIDER=openai
+  unset OPENAI_API_KEY
+  check_rc "_fx_ai_ready openai no key" 1 _fx_ai_ready
+)
+(
+  FX_PROVIDER=openai
+  OPENAI_API_KEY=dummy
+  check_rc "_fx_ai_ready openai with key" 0 _fx_ai_ready
+)
+(
+  FX_PROVIDER=anthropic
+  unset ANTHROPIC_API_KEY
+  check_rc "_fx_ai_ready anthropic no key" 1 _fx_ai_ready
+)
+(
+  FX_PROVIDER=anthropic
+  ANTHROPIC_API_KEY=dummy
+  check_rc "_fx_ai_ready anthropic with key" 0 _fx_ai_ready
+)
+(
+  FX_PROVIDER=gemini
+  unset GEMINI_API_KEY GOOGLE_API_KEY
+  check_rc "_fx_ai_ready gemini no key" 1 _fx_ai_ready
+)
+(
+  FX_PROVIDER=gemini
+  GEMINI_API_KEY=dummy
+  check_rc "_fx_ai_ready gemini with key" 0 _fx_ai_ready
+)
+(
+  FX_PROVIDER=gemini
+  unset GEMINI_API_KEY
+  GOOGLE_API_KEY=dummy
+  check_rc "_fx_ai_ready gemini with google key" 0 _fx_ai_ready
+)
+(
   FX_PROVIDER=opencode
   mkdir -p emptybin
   PATH="$TMPD/emptybin:/usr/bin:/bin"

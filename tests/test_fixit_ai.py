@@ -232,6 +232,19 @@ class TestParsePayload(unittest.TestCase):
         raw = "123"
         self.assertEqual(fixit_ai.parse_payload(raw), raw)
 
+    def test_anthropic_messages_response(self):
+        body = json.dumps({
+            "content": [{"type": "text", "text": "ls -la"}],
+            "stop_reason": "end_turn",
+        })
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+
+    def test_gemini_generate_content_response(self):
+        body = json.dumps({
+            "candidates": [{"content": {"parts": [{"text": "ls -la"}]}}]
+        })
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+
 
 class TestCollectText(unittest.TestCase):
     def test_plain_string(self):
@@ -277,6 +290,40 @@ class TestBodyCommand(unittest.TestCase):
         self.assertEqual(body["max_tokens"], 800)
         self.assertEqual(body["messages"][0], {"role": "system", "content": "sys prompt"})
         self.assertEqual(body["messages"][1], {"role": "user", "content": "user prompt"})
+
+    def test_body_anthropic_structure(self):
+        os.environ.update({
+            "FX_MODEL": "claude-sonnet-4-5",
+            "FX_SYS": "sys prompt",
+            "FX_USER": "user prompt",
+        })
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fixit_ai.cmd_body_anthropic()
+        body = json.loads(buf.getvalue())
+        self.assertEqual(body["model"], "claude-sonnet-4-5")
+        self.assertEqual(body["max_tokens"], 800)
+        self.assertEqual(body["system"], "sys prompt")
+        self.assertEqual(body["messages"], [{"role": "user", "content": "user prompt"}])
+
+    def test_body_gemini_structure(self):
+        os.environ.update({
+            "FX_SYS": "sys prompt",
+            "FX_USER": "user prompt",
+        })
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            fixit_ai.cmd_body_gemini()
+        body = json.loads(buf.getvalue())
+        self.assertEqual(body["system_instruction"], {"parts": [{"text": "sys prompt"}]})
+        self.assertEqual(
+            body["contents"],
+            [{"role": "user", "parts": [{"text": "user prompt"}]}],
+        )
 
 
 class TestExtractCommand(unittest.TestCase):
