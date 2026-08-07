@@ -85,6 +85,9 @@ list all files
 ```bash
 ./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
 ./install.sh --yes --provider openrouter --key sk-or-v1-...
+./install.sh --yes --provider openai --key sk-...
+./install.sh --yes --provider anthropic --key sk-ant-...
+./install.sh --yes --provider gemini --key AIza...
 ./install.sh --yes --provider none          # local typo fixing only
 ./install.sh --uninstall
 ```
@@ -102,7 +105,7 @@ This tool runs things in your shell. That deserves a straight answer about what 
 - **Failed-command auto-fix asks before sending.** When a broken `git`/`npm`/`docker` command would go to AI, you get `Send this failed command? [y/N]` first. Nothing is transmitted silently.
 - **Secrets are redacted** before anything leaves the machine — `--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`.
 - **Local mode is fully offline.** Nothing leaves your machine, period.
-- **Keys don't hit the process table.** The OpenRouter key and request body go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
+- **Keys don't hit the process table.** API keys and request bodies go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
 
 One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. (The `claude` provider sends the prompt via stdin, so it is not `ps`-visible.)
 
@@ -114,12 +117,15 @@ What AI mode sends: OS and shell, cwd, ~15 filenames, sample aliases, and what y
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `FX_PROVIDER` | `openrouter` | `openrouter` · `opencode` · `claude` · `codex` · `none` |
+| `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `codex` · `none` |
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
 | `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call is killed |
 | `FX_AI_ON_FAIL` | `1` | ask AI to fix failed `go`/`git`/`npm`/`docker` commands |
-| `OPENROUTER_API_KEY` | — | required only for OpenRouter |
+| `OPENROUTER_API_KEY` | — | required only for `openrouter` |
+| `OPENAI_API_KEY` | — | required only for `openai` |
+| `ANTHROPIC_API_KEY` | — | required only for `anthropic` |
+| `GEMINI_API_KEY` | — | required only for `gemini` (`GOOGLE_API_KEY` also works) |
 | `FIXIT_HOME` | `~/.local/share/fixit` | install directory |
 
 ```bash

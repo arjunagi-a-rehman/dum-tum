@@ -49,10 +49,10 @@ Usage:
   ./install.sh --uninstall
 
 Options:
-  --provider NAME   openrouter | opencode | claude | codex | none
+  --provider NAME   openrouter | openai | anthropic | gemini | opencode | claude | codex | none
   --model ID        Model id for the chosen provider
   --variant LEVEL   Reasoning effort (codex/opencode/claude: low|medium|high|...)
-  --key KEY         OpenRouter API key (provider=openrouter)
+  --key KEY         API key for key-based providers (openrouter/openai/anthropic/gemini)
   --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
@@ -61,7 +61,10 @@ Options:
   --help, -h        Show this help
 
 Env (used when --yes / non-interactive; interactive always prompts):
-  OPENROUTER_API_KEY   Same as --key
+  OPENROUTER_API_KEY   Same as --key (provider=openrouter)
+  OPENAI_API_KEY       Same as --key (provider=openai)
+  ANTHROPIC_API_KEY    Same as --key (provider=anthropic)
+  GEMINI_API_KEY       Same as --key (provider=gemini; GOOGLE_API_KEY also works)
   FX_PROVIDER          Same as --provider
   FX_MODEL             Same as --model
   FX_VARIANT           Same as --variant
@@ -91,9 +94,34 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Env var that holds the API key for a given provider ("" for CLI/none providers)
+key_var_for_provider() {
+  case "${1:-}" in
+    openrouter) echo OPENROUTER_API_KEY ;;
+    openai)     echo OPENAI_API_KEY ;;
+    anthropic)  echo ANTHROPIC_API_KEY ;;
+    gemini)     echo GEMINI_API_KEY ;;
+    *)          echo "" ;;
+  esac
+}
+
+# Pick up an API key from the environment; records which var it came from
+detect_key_env() {
+  API_KEY=""
+  KEY_ENV_VAR=""
+  local kv
+  for kv in OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY; do
+    if [[ -n "${!kv:-}" ]]; then
+      API_KEY="${!kv}"
+      KEY_ENV_VAR="$kv"
+      return 0
+    fi
+  done
+}
+
 # Env fills gaps only when not set by CLI
-if [[ "$KEY_FROM_CLI" -eq 0 && -n "${OPENROUTER_API_KEY:-}" ]]; then
-  API_KEY="$OPENROUTER_API_KEY"
+if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
+  detect_key_env
 fi
 if [[ "$PROVIDER_FROM_CLI" -eq 0 && -n "${FX_PROVIDER:-}" ]]; then
   PROVIDER="$FX_PROVIDER"
@@ -262,6 +290,9 @@ detect_ai_clis() {
 normalize_provider() {
   case "${1:-}" in
     openrouter|or) echo openrouter ;;
+    openai|oa|gpt) echo openai ;;
+    anthropic|claude-api|ac) echo anthropic ;;
+    gemini|google|g) echo gemini ;;
     opencode|oc) echo opencode ;;
     claude|cc) echo claude ;;
     codex|cx) echo codex ;;
@@ -304,7 +335,12 @@ select_provider() {
       fi
     fi
     if [[ -n "$API_KEY" ]]; then
-      PROVIDER="openrouter"
+      case "${KEY_ENV_VAR:-OPENROUTER_API_KEY}" in
+        OPENAI_API_KEY)                  PROVIDER="openai" ;;
+        ANTHROPIC_API_KEY)               PROVIDER="anthropic" ;;
+        GEMINI_API_KEY|GOOGLE_API_KEY)   PROVIDER="gemini" ;;
+        *)                               PROVIDER="openrouter" ;;
+      esac
     elif [[ "$HAVE_OPENCODE" -eq 1 ]]; then
       PROVIDER="opencode"
     elif [[ "$HAVE_CLAUDE" -eq 1 ]]; then
@@ -351,6 +387,18 @@ select_provider() {
   labels+=("OpenRouter"); values+=("openrouter")
   [[ "$hint" == "openrouter" ]] && default=$i
   i=$((i+1))
+  printf "  [%d] OpenAI API key\n" "$i"
+  labels+=("OpenAI"); values+=("openai")
+  [[ "$hint" == "openai" ]] && default=$i
+  i=$((i+1))
+  printf "  [%d] Anthropic (Claude) API key\n" "$i"
+  labels+=("Anthropic"); values+=("anthropic")
+  [[ "$hint" == "anthropic" ]] && default=$i
+  i=$((i+1))
+  printf "  [%d] Google Gemini API key\n" "$i"
+  labels+=("Gemini"); values+=("gemini")
+  [[ "$hint" == "gemini" ]] && default=$i
+  i=$((i+1))
   printf "  [%d] Skip AI (local typos only)\n" "$i"
   labels+=("Skip"); values+=("none")
   [[ "$hint" == "none" ]] && default=$i
@@ -373,39 +421,49 @@ select_provider() {
   ok "Provider: $PROVIDER"
 }
 
-# ---------- OpenRouter key ----------
+# ---------- API key (openrouter/openai/anthropic/gemini) ----------
 maybe_ask_key() {
-  [[ "$PROVIDER" == "openrouter" ]] || return 0
+  local key_var
+  key_var="$(key_var_for_provider "$PROVIDER")"
+  [[ -n "$key_var" ]] || return 0
+
+  local label key_url
+  case "$PROVIDER" in
+    openrouter) label="OpenRouter";    key_url="https://openrouter.ai/keys" ;;
+    openai)     label="OpenAI";        key_url="https://platform.openai.com/api-keys" ;;
+    anthropic)  label="Anthropic";     key_url="https://console.anthropic.com/settings/keys" ;;
+    gemini)     label="Google Gemini"; key_url="https://aistudio.google.com/apikey" ;;
+  esac
 
   # Explicit --key wins
   if [[ "$KEY_FROM_CLI" -eq 1 && -n "$API_KEY" ]]; then
-    ok "OpenRouter API key provided (from --key)"
+    ok "$label API key provided (from --key)"
     return 0
   fi
 
   if ! is_interactive; then
-    if [[ -z "$API_KEY" ]] && grep -qE '^\s*export OPENROUTER_API_KEY=.+' "$ZSHRC" 2>/dev/null; then
-      API_KEY="$(grep -E '^\s*export OPENROUTER_API_KEY=' "$ZSHRC" | tail -1 | sed -E 's/.*OPENROUTER_API_KEY=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+    if [[ -z "$API_KEY" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
+      API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
     fi
     if [[ -n "$API_KEY" ]]; then
-      ok "OpenRouter API key provided"
+      ok "$label API key provided"
       return 0
     fi
-    warn "No OpenRouter key — AI will not work until you set OPENROUTER_API_KEY."
+    warn "No $label key — AI will not work until you set $key_var."
     PROVIDER="none"
     return 0
   fi
 
   local hint=""
   [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
-  if [[ -z "$hint" ]] && grep -qE '^\s*export OPENROUTER_API_KEY=.+' "$ZSHRC" 2>/dev/null; then
+  if [[ -z "$hint" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
     hint="(key already in zshrc — Enter keeps it, or paste a new one)"
-    API_KEY="$(grep -E '^\s*export OPENROUTER_API_KEY=' "$ZSHRC" | tail -1 | sed -E 's/.*OPENROUTER_API_KEY=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+    API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
   fi
 
   echo ""
-  echo "OpenRouter API key enables natural language."
-  echo "Get one at: https://openrouter.ai/keys"
+  echo "$label API key enables natural language."
+  echo "Get one at: $key_url"
   [[ -n "$hint" ]] && echo "  $hint"
   printf "Paste key now (Enter = keep/skip): "
   local typed=""
@@ -414,7 +472,7 @@ maybe_ask_key() {
     API_KEY="$typed"
     ok "API key saved for config"
   elif [[ -n "$API_KEY" ]]; then
-    ok "Keeping existing OpenRouter API key"
+    ok "Keeping existing $label API key"
   else
     warn "No key — skipping AI."
     PROVIDER="none"
@@ -435,6 +493,9 @@ select_model() {
     if [[ -z "$MODEL" ]]; then
       case "$PROVIDER" in
         openrouter) MODEL="deepseek/deepseek-v4-flash" ;;
+        openai)     MODEL="gpt-4o-mini" ;;
+        anthropic)  MODEL="claude-sonnet-4-5" ;;
+        gemini)     MODEL="gemini-2.5-flash" ;;
         opencode|claude|codex) MODEL="" ;;
       esac
     fi
@@ -458,6 +519,27 @@ select_model() {
         "openai/gpt-4o-mini"
         "google/gemini-2.5-flash"
         "anthropic/claude-sonnet-4"
+      )
+      ;;
+    openai)
+      models=(
+        "gpt-4o-mini"
+        "gpt-4o"
+        "gpt-5-mini"
+      )
+      ;;
+    anthropic)
+      models=(
+        "claude-sonnet-4-5"
+        "claude-haiku-4-5"
+        "claude-opus-4-1"
+      )
+      ;;
+    gemini)
+      models=(
+        "gemini-2.5-flash"
+        "gemini-2.5-flash-lite"
+        "gemini-2.5-pro"
       )
       ;;
     opencode)
@@ -676,7 +758,9 @@ test_ai() {
   [[ "$SKIP_AI_TEST" -eq 1 ]] && return 0
   [[ "$PROVIDER" == "none" ]] && return 0
 
-  if [[ "$PROVIDER" == "openrouter" && -z "$API_KEY" ]]; then
+  local key_var
+  key_var="$(key_var_for_provider "$PROVIDER")"
+  if [[ -n "$key_var" && -z "$API_KEY" ]]; then
     warn "Skipping AI test (no API key)"
     return 0
   fi
@@ -704,12 +788,14 @@ test_ai() {
   # background + watchdog: CLI backends can queue for a long time
   local tmpout pid waited=0 limit=120
   tmpout="$(mktemp)"
+  local -a envargs=()
+  [[ -n "$key_var" ]] && envargs+=("${key_var}=${API_KEY}")
   (
     FX_PROVIDER="$PROVIDER" \
     FX_MODEL="$MODEL" \
     FX_VARIANT="$VARIANT" \
-    OPENROUTER_API_KEY="$API_KEY" \
     FX_AI_TIMEOUT=100 \
+    env "${envargs[@]}" \
     "$test_shell" -c '
       source "$1"
       _fx_ai "print only this exact shell command on one line: ls -la"
@@ -755,7 +841,7 @@ test_ai() {
     2)
       PROVIDER=""
       MODEL=""
-      API_KEY="${OPENROUTER_API_KEY:-}"
+      detect_key_env
       select_provider
       maybe_ask_key
       select_model
@@ -796,14 +882,22 @@ write_rc_block() {
     variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode/claude)'
   fi
 
-  if [[ "$PROVIDER" == "openrouter" && -n "$API_KEY" ]]; then
+  local key_var key_placeholder=""
+  key_var="$(key_var_for_provider "$PROVIDER")"
+  case "$PROVIDER" in
+    openrouter) key_placeholder="sk-or-v1-..." ;;
+    openai)     key_placeholder="sk-..." ;;
+    anthropic)  key_placeholder="sk-ant-..." ;;
+    gemini)     key_placeholder="AIza..." ;;
+  esac
+  if [[ -n "$key_var" && -n "$API_KEY" ]]; then
     local esc="${API_KEY//\\/\\\\}"
     esc="${esc//\"/\\\"}"
-    key_line="export OPENROUTER_API_KEY=\"$esc\""
-  elif [[ "$PROVIDER" == "openrouter" ]]; then
-    key_line='# export OPENROUTER_API_KEY="sk-or-v1-..."   # uncomment and add your key'
+    key_line="export ${key_var}=\"$esc\""
+  elif [[ -n "$key_var" ]]; then
+    key_line="# export ${key_var}=\"${key_placeholder}\"   # uncomment and add your key"
   else
-    key_line='# OPENROUTER_API_KEY not required for this provider'
+    key_line='# no API key required for this provider'
   fi
 
   local block
@@ -843,7 +937,7 @@ EOF
     printf '\n%s\n' "$block" >> "$rc_file"
   fi
 
-  # The block can contain OPENROUTER_API_KEY — never leave the file
+  # The block can contain an API key — never leave the file
   # group/world-readable (stock ~/.bashrc from /etc/skel is 0644).
   if [[ "$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null)" != "600" ]]; then
     warn "$rc_file was readable by other users — tightening to 600 (key inside)"
@@ -888,6 +982,9 @@ print_next_steps() {
   local ai_hint
   case "${PROVIDER:-none}" in
     openrouter) ai_hint="OpenRouter ($MODEL)" ;;
+    openai)     ai_hint="OpenAI ($MODEL)" ;;
+    anthropic)  ai_hint="Anthropic ($MODEL)" ;;
+    gemini)     ai_hint="Gemini ($MODEL)" ;;
     opencode)   ai_hint="OpenCode${MODEL:+ ($MODEL)}" ;;
     claude)     ai_hint="Claude Code${MODEL:+ ($MODEL)}" ;;
     codex)      ai_hint="Codex${MODEL:+ ($MODEL)}" ;;
@@ -924,10 +1021,10 @@ Try:
 
 Change provider later:
 
-  export FX_PROVIDER="opencode"   # or claude | codex | openrouter | none
+  export FX_PROVIDER="opencode"   # or claude | codex | openrouter | openai | anthropic | gemini | none
   export FX_MODEL="..."
-  # openrouter only:
-  export OPENROUTER_API_KEY="sk-or-v1-..."
+  # key-based providers only:
+  export OPENROUTER_API_KEY="sk-or-v1-..."   # or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
 
 Docs: https://github.com/arjunagi-a-rehman/dum-tum
 
@@ -971,7 +1068,7 @@ uninstall_fixit() {
   cleanup=$(cat <<EOF
 $MARKER_BEGIN
 # fixit uninstalled — clear leftover exports when you source this file
-unset FX_PROVIDER FX_MODEL FX_VARIANT OPENROUTER_API_KEY 2>/dev/null || true
+unset FX_PROVIDER FX_MODEL FX_VARIANT OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY 2>/dev/null || true
 $MARKER_END
 EOF
 )
@@ -997,7 +1094,7 @@ EOF
     echo "  source $ZSHRC      # zsh"
     echo "  source $BASHRC     # bash"
     echo ""
-    echo "That unsets FX_PROVIDER, FX_MODEL, FX_VARIANT, OPENROUTER_API_KEY and drops the hooks."
+    echo "That unsets FX_PROVIDER, FX_MODEL, FX_VARIANT, the API key vars and drops the hooks."
   fi
 }
 

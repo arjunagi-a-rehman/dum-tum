@@ -199,7 +199,7 @@ _fx_fix_failed_line() {
 }
 
 # ================= Stage 2: AI resolver =================
-# Providers: openrouter (default) | opencode | claude | codex | none
+# Providers: openrouter (default) | openai | anthropic | gemini | opencode | claude | codex | none
 FX_PROVIDER=${FX_PROVIDER:-openrouter}
 
 _fx_ai_sys_prompt() {
@@ -235,6 +235,9 @@ _fx_shell_name() {
 _fx_ai_ready() {
   case "${FX_PROVIDER:-openrouter}" in
     openrouter) [[ -n "${OPENROUTER_API_KEY:-}" ]] ;;
+    openai)     [[ -n "${OPENAI_API_KEY:-}" ]] ;;
+    anthropic)  [[ -n "${ANTHROPIC_API_KEY:-}" ]] ;;
+    gemini)     [[ -n "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]] ;;
     opencode)   command -v opencode >/dev/null 2>&1 ;;
     claude)     command -v claude >/dev/null 2>&1 ;;
     codex)      command -v codex >/dev/null 2>&1 ;;
@@ -248,15 +251,16 @@ _fx_ai_extract() {  # stdin: free text or JSON/JSONL -> one command on stdout
 }
 
 
-_fx_ai_http() {  # $1=json body -> raw api response (overridable in tests)
-  # Key and body go via stdin/tempfile, never argv (ps-visible to local users).
-  local body_file rc
+_fx_ai_http() {  # $1=json body $2=url $3..=extra headers -> raw api response (overridable in tests)
+  # Key (inside headers) and body go via stdin/tempfile, never argv (ps-visible to local users).
+  local body="$1" url="$2" body_file rc h
+  shift 2
   body_file="$(mktemp "${TMPDIR:-/tmp}/fixit-body.XXXXXX")" || return 1
-  printf '%s' "$1" > "$body_file"
-  printf 'header = "Authorization: Bearer %s"\n' "$OPENROUTER_API_KEY" | \
+  printf '%s' "$body" > "$body_file"
+  for h in "$@"; do printf 'header = "%s"\n' "$h"; done | \
     curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
       -K - -H "Content-Type: application/json" --data-binary @"$body_file" \
-      https://openrouter.ai/api/v1/chat/completions
+      "$url"
   rc=$?
   rm -f "$body_file"
   return $rc
@@ -268,7 +272,40 @@ _fx_ai_openrouter() {  # $* = intent
   sys_p="$(_fx_ai_sys_prompt)"
   user_p="$(_fx_ai_user_payload "$@")"
   body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
-  _fx_ai_http "$body" | _fx_ai_extract
+  _fx_ai_http "$body" https://openrouter.ai/api/v1/chat/completions \
+    "Authorization: Bearer $OPENROUTER_API_KEY" | _fx_ai_extract
+}
+
+_fx_ai_openai() {  # $* = intent
+  local model="${FX_MODEL:-gpt-4o-mini}"
+  local sys_p user_p body
+  sys_p="$(_fx_ai_sys_prompt)"
+  user_p="$(_fx_ai_user_payload "$@")"
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
+  _fx_ai_http "$body" https://api.openai.com/v1/chat/completions \
+    "Authorization: Bearer $OPENAI_API_KEY" | _fx_ai_extract
+}
+
+_fx_ai_anthropic() {  # $* = intent
+  local model="${FX_MODEL:-claude-sonnet-4-5}"
+  local sys_p user_p body
+  sys_p="$(_fx_ai_sys_prompt)"
+  user_p="$(_fx_ai_user_payload "$@")"
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-anthropic)
+  _fx_ai_http "$body" https://api.anthropic.com/v1/messages \
+    "x-api-key: $ANTHROPIC_API_KEY" "anthropic-version: 2023-06-01" | _fx_ai_extract
+}
+
+_fx_ai_gemini() {  # $* = intent
+  local model="${FX_MODEL:-gemini-2.5-flash}"
+  local sys_p user_p body key
+  sys_p="$(_fx_ai_sys_prompt)"
+  user_p="$(_fx_ai_user_payload "$@")"
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" python3 "$_FX_AI_PY" body-gemini)
+  key="${GEMINI_API_KEY:-$GOOGLE_API_KEY}"
+  _fx_ai_http "$body" \
+    "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent" \
+    "x-goog-api-key: $key" | _fx_ai_extract
 }
 
 # Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
@@ -337,6 +374,9 @@ _fx_ai_codex() {  # $* = intent
 _fx_ai() {  # $* = intent or failed command -> prints one suggested command
   case "${FX_PROVIDER:-openrouter}" in
     openrouter) _fx_ai_openrouter "$@" ;;
+    openai)     _fx_ai_openai "$@" ;;
+    anthropic)  _fx_ai_anthropic "$@" ;;
+    gemini)     _fx_ai_gemini "$@" ;;
     opencode)   _fx_ai_opencode "$@" ;;
     claude)     _fx_ai_claude "$@" ;;
     codex)      _fx_ai_codex "$@" ;;
@@ -348,7 +388,16 @@ _fx_ai_resolve() {   # called with the full original line
   if ! _fx_ai_ready; then
     case "${FX_PROVIDER:-openrouter}" in
       openrouter)
-        printf '\033[31m? set OPENROUTER_API_KEY for AI (or FX_PROVIDER=opencode|claude|codex)\033[0m\n' >&2
+        printf '\033[31m? set OPENROUTER_API_KEY for AI (or FX_PROVIDER=openai|anthropic|gemini|opencode|claude|codex)\033[0m\n' >&2
+        ;;
+      openai)
+        printf '\033[31m? set OPENAI_API_KEY for AI\033[0m\n' >&2
+        ;;
+      anthropic)
+        printf '\033[31m? set ANTHROPIC_API_KEY for AI\033[0m\n' >&2
+        ;;
+      gemini)
+        printf '\033[31m? set GEMINI_API_KEY (or GOOGLE_API_KEY) for AI\033[0m\n' >&2
         ;;
       opencode)
         printf '\033[31m? opencode not found on PATH\033[0m\n' >&2

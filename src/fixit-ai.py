@@ -2,8 +2,10 @@
 """fixit AI helpers.
 
 Usage:
-    fixit-ai.py extract   # stdin: free text / JSON / JSONL -> one command on stdout
-    fixit-ai.py body      # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body on stdout
+    fixit-ai.py extract         # stdin: free text / JSON / JSONL -> one command on stdout
+    fixit-ai.py body            # env FX_SYS, FX_USER, FX_MODEL -> OpenAI-compatible JSON body
+    fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
+    fixit-ai.py body-gemini     # env FX_SYS, FX_USER -> Gemini generateContent JSON body
 """
 
 import json
@@ -76,7 +78,8 @@ def collect_text(obj: Any, parts: list) -> None:
             v = part.get(k)
             if isinstance(v, str) and v.strip():
                 parts.append(v)
-    for k in ("text", "content", "message", "delta", "output", "reasoning", "result"):
+    for k in ("text", "content", "message", "delta", "output", "reasoning", "result",
+              "candidates", "parts"):
         v = obj.get(k)
         if isinstance(v, str) and v.strip():
             parts.append(v)
@@ -160,10 +163,34 @@ def cmd_body() -> None:
     }))
 
 
+def cmd_body_anthropic() -> None:
+    print(json.dumps({
+        "model": os.environ["FX_MODEL"],
+        "max_tokens": 800,
+        "system": os.environ["FX_SYS"],
+        "messages": [
+            {"role": "user", "content": os.environ["FX_USER"]},
+        ],
+    }))
+
+
+def cmd_body_gemini() -> None:
+    print(json.dumps({
+        "system_instruction": {"parts": [{"text": os.environ["FX_SYS"]}]},
+        "contents": [
+            {"role": "user", "parts": [{"text": os.environ["FX_USER"]}]},
+        ],
+    }))
+
+
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
     if mode == "body":
         cmd_body()
+    elif mode == "body-anthropic":
+        cmd_body_anthropic()
+    elif mode == "body-gemini":
+        cmd_body_gemini()
     else:
         cmd_extract()
 
