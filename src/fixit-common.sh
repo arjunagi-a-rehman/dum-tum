@@ -203,7 +203,7 @@ _fx_fix_failed_line() {
 FX_PROVIDER=${FX_PROVIDER:-openrouter}
 
 _fx_ai_sys_prompt() {
-  printf '%s' "You translate user intent or broken shell commands into ONE correct shell command line for their machine. Reply with ONLY the command on the first line — no markdown fences, no backticks, no explanation, no thinking, do not run anything. Use the user's own aliases when they fit. If the action is destructive or irreversible, prefix with: # DANGER: "
+  printf '%s' "You translate user intent or broken shell commands into ONE correct shell command line for their machine. Reply with ONLY the command on the first line — no markdown fences, no backticks, no explanation, no thinking, do not run anything. Use the user's own aliases and project scripts (package.json scripts, make targets) when they fit. To start/run something, prefer the project's own script. On macOS, viewing/opening a file means the open command (e.g. open index.html for a browser, open -a Numbers file.xlsx); on Linux use xdg-open. If the action is destructive or irreversible, prefix with: # DANGER: "
 }
 
 # Mask common secret shapes before anything is sent to an AI provider.
@@ -221,11 +221,13 @@ _fx_strip_ctrl() {  # stdin -> stdout (keeps newline/tab)
 }
 
 _fx_ai_user_payload() {  # $* = intent
-  local ctx als task
-  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD; files here: $(ls -1 2>/dev/null | tr -d '[:cntrl:]' | head -15 | tr '\n' ' ')"
+  local ctx lsal proj als task
+  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD"
+  lsal="$(ls -al 2>/dev/null | _fx_strip_ctrl | head -20 | _fx_redact_secrets)"
+  proj="$(python3 "$_FX_AI_PY" proj 2>/dev/null | _fx_strip_ctrl | _fx_redact_secrets)"
   als="$(alias 2>/dev/null | _fx_strip_ctrl | head -30 | _fx_redact_secrets)"
   task="$(printf '%s' "$*" | _fx_strip_ctrl | _fx_redact_secrets)"
-  printf '%s\nMy aliases:\n%s\nTask/failed input: %s' "$ctx" "$als" "$task"
+  printf '%s\nDirectory listing (ls -al):\n%s\nProject hints:\n%s\nMy aliases:\n%s\nTask/failed input: %s' "$ctx" "$lsal" "$proj" "$als" "$task"
 }
 
 _fx_shell_name() {

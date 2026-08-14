@@ -6,6 +6,7 @@ Usage:
     fixit-ai.py body            # env FX_SYS, FX_USER, FX_MODEL -> OpenAI-compatible JSON body
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
     fixit-ai.py body-gemini     # env FX_SYS, FX_USER -> Gemini generateContent JSON body
+    fixit-ai.py proj            # print compact project hints for cwd (scripts, targets, markers)
 """
 
 import json
@@ -183,9 +184,51 @@ def cmd_body_gemini() -> None:
     }))
 
 
+PROJECT_MARKERS = (
+    "docker-compose.yml", "docker-compose.yaml", "requirements.txt", "pyproject.toml",
+    "go.mod", "Cargo.toml", "Gemfile", "manage.py", "composer.json",
+)
+
+
+def proj_hints(cwd: str = ".") -> list:
+    """Compact facts about the project in cwd that help pick the right command."""
+    hints = []
+    pkg = os.path.join(cwd, "package.json")
+    if os.path.isfile(pkg):
+        try:
+            with open(pkg, encoding="utf-8") as fh:
+                scripts = (json.load(fh).get("scripts") or {})
+        except Exception:
+            scripts = {}
+        if scripts:
+            hints.append("package.json scripts: " + ", ".join(scripts))
+    mk = os.path.join(cwd, "Makefile")
+    if os.path.isfile(mk):
+        try:
+            with open(mk, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+            targets = [t for t in re.findall(r"^([a-zA-Z0-9_.-]+):", raw, re.M)
+                       if not t.startswith(".")]
+            targets = list(dict.fromkeys(targets))[:12]
+        except Exception:
+            targets = []
+        if targets:
+            hints.append("make targets: " + ", ".join(targets))
+    found = [m for m in PROJECT_MARKERS if os.path.isfile(os.path.join(cwd, m))]
+    if found:
+        hints.append("project files: " + ", ".join(found))
+    return hints
+
+
+def cmd_proj() -> None:
+    print("\n".join(proj_hints()))
+
+
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
-    if mode == "body":
+    if mode == "proj":
+        cmd_proj()
+    elif mode == "body":
         cmd_body()
     elif mode == "body-anthropic":
         cmd_body_anthropic()
