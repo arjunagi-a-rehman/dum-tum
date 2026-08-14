@@ -354,6 +354,42 @@ class TestExtractCommand(unittest.TestCase):
         self.assertEqual(self._run_extract(""), "")
 
 
+class TestProjHints(unittest.TestCase):
+    def test_empty_dir_no_hints(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(fixit_ai.proj_hints(d), [])
+
+    def test_package_json_scripts(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "package.json").write_text(
+                json.dumps({"name": "app", "scripts": {"start": "node s.js", "dev": "vite"}}))
+            hints = fixit_ai.proj_hints(d)
+            self.assertEqual(hints, ["package.json scripts: start, dev"])
+
+    def test_invalid_package_json_ignored(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "package.json").write_text("{broken")
+            self.assertEqual(fixit_ai.proj_hints(d), [])
+
+    def test_makefile_targets(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "Makefile").write_text("build:\n\tcc x.c\n\n.PHONY: test\ntest:\n\tpytest\n")
+            hints = fixit_ai.proj_hints(d)
+            self.assertEqual(hints, ["make targets: build, test"])
+
+    def test_marker_files(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            Path(d, "docker-compose.yml").write_text("services: {}")
+            Path(d, "go.mod").write_text("module x")
+            hints = fixit_ai.proj_hints(d)
+            self.assertEqual(hints, ["project files: docker-compose.yml, go.mod"])
+
+
 class TestMain(unittest.TestCase):
     def test_main_defaults_to_extract(self):
         import io
