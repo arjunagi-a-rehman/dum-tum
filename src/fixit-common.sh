@@ -90,15 +90,30 @@ _fx_confirm_run() {
     IFS= read -r -k 1 key </dev/tty || return 1
   else
     IFS= read -r -n 1 key </dev/tty || return 1
-    [[ -z "$key" ]] && key=$'\n'
   fi
+  [[ -z "$key" ]] && key=$'\n'
   printf '\n' >&2
   case "$key" in
     $'\n'|$'\r')
-      eval "$cmd"
+      if [[ "${_FX_ZLE_CONFIRM:-0}" -eq 1 ]]; then
+        _FX_ZLE_CMD="$cmd"
+        _FX_ZLE_ACCEPT=1
+      elif [[ "${_FX_READLINE_CONFIRM:-0}" -eq 1 ]]; then
+        _FX_READLINE_CMD="$cmd"
+        _FX_READLINE_ACCEPT=1
+      else
+        eval "$cmd"
+      fi
       ;;
     e|E)
-      if [[ -n "${ZSH_VERSION:-}" ]]; then
+      if [[ "${_FX_ZLE_CONFIRM:-0}" -eq 1 ]]; then
+        _FX_ZLE_CMD="$cmd"
+        return 0
+      elif [[ "${_FX_READLINE_CONFIRM:-0}" -eq 1 ]]; then
+        _FX_READLINE_CMD="$cmd"
+        _FX_READLINE_EDIT=1
+        return 0
+      elif [[ -n "${ZSH_VERSION:-}" ]]; then
         print -z -- "$cmd"   # prefill next prompt's line editor
         return 0
       fi

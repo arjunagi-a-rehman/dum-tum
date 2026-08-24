@@ -36,8 +36,16 @@ _fx_accept_line() {
   if _fx_is_english_line "$full"; then
     BUFFER=""
     zle -I
+    local _FX_ZLE_CONFIRM=1 _FX_ZLE_ACCEPT=0 _FX_ZLE_CMD=""
     _fx_ai_resolve "$full"
-    zle reset-prompt
+    if (( _FX_ZLE_ACCEPT )); then
+      BUFFER="$_FX_ZLE_CMD"
+      zle .accept-line
+    else
+      [[ -n "$_FX_ZLE_CMD" ]] && BUFFER="$_FX_ZLE_CMD"
+      zle reset-prompt
+      zle end-of-line
+    fi
     return
   fi
   zle .accept-line

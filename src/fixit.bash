@@ -47,10 +47,22 @@ if [[ $- == *i* ]]; then
     _fx_accept_line() {
       if _fx_is_english_line "$READLINE_LINE"; then
         local full="$READLINE_LINE"
+        local _FX_READLINE_CONFIRM=1 _FX_READLINE_ACCEPT=0 _FX_READLINE_EDIT=0 _FX_READLINE_CMD=""
         READLINE_LINE=""
         printf '\n'
         _fx_ai_resolve "$full"
+        if (( _FX_READLINE_ACCEPT )); then
+          READLINE_LINE="$_FX_READLINE_CMD"
+          READLINE_POINT=${#READLINE_LINE}
+        elif (( _FX_READLINE_EDIT )); then
+          READLINE_LINE="$_FX_READLINE_CMD"
+          READLINE_POINT=${#READLINE_LINE}
+          bind '"\C-xfa": "\C-xfr"' 2>/dev/null
+        fi
       fi
+    }
+    _fx_resume_edit() {
+      bind '"\C-xfa": accept-line' 2>/dev/null
     }
     _fx_is_english_line() {
       local line="${1#"${1%%[![:space:]]*}"}"
@@ -72,6 +84,8 @@ if [[ $- == *i* ]]; then
       return 0
     }
     bind -x '"\C-xfx": _fx_accept_line' 2>/dev/null
-    bind '"\C-m": "\C-xfx\C-j"' 2>/dev/null
+    bind -x '"\C-xfr": _fx_resume_edit' 2>/dev/null
+    bind '"\C-xfa": accept-line' 2>/dev/null
+    bind '"\C-m": "\C-xfx\C-xfa"' 2>/dev/null
   fi
 fi
