@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-shells:
+    name: Linux — Bash 5 and zsh
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Install shell test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck zsh
+
+      - name: Show tool versions
+        run: |
+          bash --version | head -n 1
+          zsh --version
+          python3 --version
+          node --version
+          shellcheck --version
+
+      - name: Run Bash 5 PTY confirmation test
+        run: |
+          test "${BASH_VERSINFO[0]}" -ge 4
+          python3 -m unittest \
+            tests.test_shell_interactive.InteractiveAdapterTest.test_bash_confirmation_flow -v
+
+      - name: Run zsh PTY confirmation test
+        run: |
+          command -v zsh
+          python3 -m unittest \
+            tests.test_shell_interactive.InteractiveAdapterTest.test_zsh_confirmation_flow -v
+
+      - name: Run complete test suite
+        run: bash tests/run-tests.sh
+
+      - name: Verify npm package contents
+        run: npm pack --dry-run
+
+  macos-zsh:
+    name: macOS — zsh
+    runs-on: macos-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+
+      - name: Install shellcheck
+        run: brew install shellcheck
+
+      - name: Show tool versions
+        run: |
+          zsh --version
+          python3 --version
+          node --version
+          shellcheck --version
+
+      - name: Run zsh PTY confirmation test
+        run: |
+          command -v zsh
+          python3 -m unittest \
+            tests.test_shell_interactive.InteractiveAdapterTest.test_zsh_confirmation_flow -v
+
+      - name: Run complete test suite
+        run: bash tests/run-tests.sh

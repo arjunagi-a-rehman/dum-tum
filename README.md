@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/dum-tum.svg)](https://www.npmjs.com/package/dum-tum)
 [![license](https://img.shields.io/npm/l/dum-tum.svg)](LICENSE)
+[![CI](https://github.com/arjunagi-a-rehman/dum-tum/actions/workflows/ci.yml/badge.svg)](https://github.com/arjunagi-a-rehman/dum-tum/actions/workflows/ci.yml)
 
 **The shell fixer with no trigger key.** Just type what you mean and press Enter.
 
@@ -202,6 +203,8 @@ bash tests/run-tests.sh
 ```
 
 The suite covers Python parsing and payloads, shared shell helpers, syntax, shellcheck, and real pseudo-terminal confirmation flows. Interactive tests run for shells available on the machine: zsh on macOS and Bash 4+ on Linux. See [CONTRIBUTING.md](CONTRIBUTING.md) for the cross-platform test command and contribution workflow.
+
+Every pull request automatically runs both supported interactive paths in GitHub Actions: Bash 5 and zsh on Linux, plus native zsh on macOS.
 
 ---
 

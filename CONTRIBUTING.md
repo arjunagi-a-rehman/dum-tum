@@ -22,6 +22,8 @@ bash tests/run-tests.sh
 
 The command must finish with `All tests passed` and clean shellcheck output.
 
+Every pull request triggers `.github/workflows/ci.yml`. The Linux job installs and explicitly runs both Bash 5 and zsh PTY tests before the complete suite and npm package check. The macOS job explicitly runs the native zsh PTY test before the complete suite.
+
 ## Cross-platform confirmation tests
 
 `tests/test_shell_interactive.py` launches real interactive shells in pseudo-terminals. It verifies that Enter runs a confirmed suggestion through the normal shell editor, cancel does not execute it, edit keeps the suggestion changeable, and ordinary commands bypass AI handling.
@@ -48,6 +50,6 @@ docker run --rm \
 
 ## Pull requests
 
-Describe the user-visible behavior, supported shells tested, and the exact verification commands run. Keep unrelated changes out of the same pull request.
+Describe the user-visible behavior, supported shells tested, and the exact verification commands run. Keep unrelated changes out of the same pull request. Do not merge until both `Linux — Bash 5 and zsh` and `macOS — zsh` pass.
 
 Releases are maintained separately using [RELEASING.md](RELEASING.md).
