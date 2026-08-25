@@ -1,5 +1,8 @@
 # dum-tum
 
+[![npm version](https://img.shields.io/npm/v/dum-tum.svg)](https://www.npmjs.com/package/dum-tum)
+[![license](https://img.shields.io/npm/l/dum-tum.svg)](LICENSE)
+
 **The shell fixer with no trigger key.** Just type what you mean and press Enter.
 
 ```bash
@@ -17,7 +20,7 @@ No `f`. No `??`. No `sgpt "..."`. No mode switch. You type into your shell the w
 macOS + Linux · zsh + bash · MIT
 
 ```bash
-npx dum-tum
+npx dum-tum@latest
 ```
 
 ---
@@ -36,6 +39,8 @@ Every other terminal fixer makes you *ask* for help. That's the friction — you
 | **dum-tum** | **you just type. Enter.** |
 
 dum-tum hooks `accept-line` — the moment you press Enter, before your shell rejects anything. Typos get fixed locally and instantly. Plain English gets routed to AI. Everything else runs exactly as it always did.
+
+When an AI suggestion needs confirmation, Enter submits it through your shell's normal line editor, `e` leaves it in the buffer for editing, and `n` cancels it.
 
 The second difference: **it doesn't demand another API key.** If you already have `opencode`, `claude` (Claude Code), or `codex` installed and logged in, dum-tum uses them. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
 
@@ -58,12 +63,12 @@ The second difference: **it doesn't demand another API key.** If you already hav
 
 ---
 
-## Install
+## Install or update
 
 **macOS, Ubuntu, Debian, Fedora, Arch:**
 
 ```bash
-npx dum-tum
+npx dum-tum@latest
 ```
 
 Or without Node:
@@ -80,6 +85,12 @@ sl
 list all files
 ```
 
+Running the installer again updates the scripts in `~/.local/share/fixit` and replaces the existing marked config block instead of adding a duplicate. Restart the active shell after an update so its in-memory functions are refreshed:
+
+```bash
+exec zsh          # or: exec bash
+```
+
 **Non-interactive:**
 
 ```bash
@@ -92,7 +103,13 @@ list all files
 ./install.sh --uninstall
 ```
 
-Requires zsh or bash 4+, `python3`, and `curl`. On macOS, `/bin/bash` 3.2 is too old for the Enter-hook — typo fixing still works, or install Homebrew bash 5 for the full experience.
+Requires `python3`, `curl`, and either zsh or Bash 4+.
+
+| Shell | Support |
+| --- | --- |
+| zsh 5+ on macOS or Linux | Full Enter hook, confirmation, edit, and cancel behavior |
+| Bash 4+ on Linux or macOS | Full Enter hook, confirmation, edit, and cancel behavior |
+| macOS `/bin/bash` 3.2 | Local typo handling works; install Homebrew Bash 5 or use zsh for the Enter hook |
 
 ---
 
@@ -102,14 +119,14 @@ This tool runs things in your shell. That deserves a straight answer about what 
 
 - **Only read-only commands auto-run.** `ls`, `cat`, `pwd` and friends. Everything else asks.
 - **AI output never auto-runs.** Ever. It always waits for Enter.
-- **Failed-command auto-fix asks before sending.** When a broken `git`/`npm`/`docker` command would go to AI, you get `Send this failed command? [y/N]` first. Nothing is transmitted silently.
+- **Failed-command AI can be disabled.** Eligible failed `git`/`npm`/`docker` and similar commands are sent automatically when `FX_AI_ON_FAIL=1` and AI is configured. Set `FX_AI_ON_FAIL=0` if you only want explicit natural-language requests sent.
 - **Secrets are redacted** before anything leaves the machine — `--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`.
 - **Local mode is fully offline.** Nothing leaves your machine, period.
 - **Keys don't hit the process table.** API keys and request bodies go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
 
 One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. (The `claude` provider sends the prompt via stdin, so it is not `ps`-visible.)
 
-What AI mode sends: OS and shell, cwd, ~15 filenames, sample aliases, and what you typed. Don't paste secrets into natural-language prompts.
+What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detected package scripts or Make targets, up to 30 aliases, and the task or failed input. Known secret patterns are redacted, but filenames and command arguments can still be sensitive. Don't put secrets in natural-language prompts, filenames, aliases, or failed commands.
 
 ---
 
@@ -121,7 +138,7 @@ What AI mode sends: OS and shell, cwd, ~15 filenames, sample aliases, and what y
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
 | `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call is killed |
-| `FX_AI_ON_FAIL` | `1` | ask AI to fix failed `go`/`git`/`npm`/`docker` commands |
+| `FX_AI_ON_FAIL` | `1` | automatically ask AI to suggest fixes for eligible failed commands |
 | `OPENROUTER_API_KEY` | — | required only for `openrouter` |
 | `OPENAI_API_KEY` | — | required only for `openai` |
 | `ANTHROPIC_API_KEY` | — | required only for `anthropic` |
@@ -162,7 +179,8 @@ Enter pressed
 | Nothing happens in bash | bash 3.2 is too old — `brew install bash`, or use zsh |
 | `where is …` runs builtin `where` | update to latest — needs the accept-line hook |
 | `…resolving` then timeout | check network/VPN and provider auth; try another `FX_MODEL` |
-| Old behavior after update | `source ~/.zshrc` or re-run the installer |
+| Old behavior after update | restart the loaded shell with `exec zsh` or `exec bash` |
+| Suggestion appears but Enter does not run it | update with `npx dum-tum@latest`, then run `exec zsh` or `exec bash` |
 | `opencode`/`claude`/`codex` not found | install the CLI and ensure it's on `PATH`, or switch to OpenRouter |
 
 Quick diagnostic:
@@ -172,6 +190,18 @@ echo $SHELL; python3 --version; echo $FX_PROVIDER $FX_MODEL
 command -v opencode; command -v claude; command -v codex
 whence -w command_not_found_handler
 ```
+
+---
+
+## Development and tests
+
+Run the complete local suite before submitting a change:
+
+```bash
+bash tests/run-tests.sh
+```
+
+The suite covers Python parsing and payloads, shared shell helpers, syntax, shellcheck, and real pseudo-terminal confirmation flows. Interactive tests run for shells available on the machine: zsh on macOS and Bash 4+ on Linux. See [CONTRIBUTING.md](CONTRIBUTING.md) for the cross-platform test command and contribution workflow.
 
 ---
 
@@ -193,7 +223,15 @@ echo 'source "$HOME/.local/share/fixit/fixit.zsh"' >> ~/.zshrc
 | `src/fixit-ai.py` | AI payload/extract helper |
 | `install.sh` | macOS + Linux installer |
 | `bin/dum-tum.js` | `npx` entrypoint |
-| `tests/` | `bash tests/run-tests.sh` |
+| `tests/test_shell_interactive.py` | PTY-level Zsh and Bash confirmation tests |
+| `tests/` | full suite via `bash tests/run-tests.sh` |
+
+## Project docs
+
+- [Contributing and development](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Release process](RELEASING.md)
+- [GitHub releases](https://github.com/arjunagi-a-rehman/dum-tum/releases)
 
 ## License
 
