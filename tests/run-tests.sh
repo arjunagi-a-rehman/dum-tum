@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test runner: python unit tests + shell syntax checks + shellcheck (if present).
+# Test runner: Python tests + shell tests + required syntax and shellcheck gates.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,21 +17,27 @@ info "Shell function tests"
 bash tests/test_shell.sh
 ok "Shell function tests passed"
 
+if FX_TEST_FORCE_PROVIDER_FAILURE=1 bash tests/test_shell.sh >/dev/null 2>&1; then
+  err "Shell failure propagation self-test unexpectedly passed"
+  exit 1
+fi
+ok "Shell failure propagation self-test passed"
+
 info "Shell syntax checks"
 bash -n install.sh src/fixit-common.sh src/fixit.bash
-if command -v zsh >/dev/null 2>&1; then
-  zsh -n src/fixit.zsh
-else
-  err "zsh not found — skipped src/fixit.zsh syntax check"
+if ! command -v zsh >/dev/null 2>&1; then
+  err "zsh is required for the syntax gate"
+  exit 1
 fi
+zsh -n src/fixit.zsh
 ok "Shell syntax OK"
 
-if command -v shellcheck >/dev/null 2>&1; then
-  info "shellcheck"
-  shellcheck -S warning install.sh src/fixit-common.sh src/fixit.bash
-  ok "shellcheck clean"
-else
-  err "shellcheck not installed — skipped (brew install shellcheck)"
+if ! command -v shellcheck >/dev/null 2>&1; then
+  err "shellcheck is required (install it with brew or your package manager)"
+  exit 1
 fi
+info "shellcheck"
+shellcheck -S warning install.sh src/fixit-common.sh src/fixit.bash
+ok "shellcheck clean"
 
 ok "All tests passed"

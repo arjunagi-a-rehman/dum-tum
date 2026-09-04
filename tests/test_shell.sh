@@ -6,11 +6,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=../src/fixit-common.sh
 source "$ROOT/src/fixit-common.sh"
 
-PASS=0
-FAIL=0
+TMPD="$(mktemp -d)"
+RESULTS="$TMPD/results"
+: > "$RESULTS"
+trap 'rm -rf "$TMPD"' EXIT
 
-ok()   { PASS=$((PASS+1)); printf '\033[32m✓\033[0m %s\n' "$1"; }
-bad()  { FAIL=$((FAIL+1)); printf '\033[31m✗\033[0m %s\n' "$1"; }
+ok() {
+  printf 'pass\n' >> "$RESULTS"
+  printf '\033[32m✓\033[0m %s\n' "$1"
+}
+bad() {
+  printf 'fail\n' >> "$RESULTS"
+  printf '\033[31m✗\033[0m %s\n' "$1"
+  return 1
+}
 
 check_eq() { # $1=desc $2=expected $3=actual
   if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1 (expected [$2], got [$3])"; fi
@@ -22,8 +31,6 @@ check_rc() { # $1=desc $2=expected rc $3...=cmd
   if [[ "$got" == "$want" ]]; then ok "$desc"; else bad "$desc (expected rc $want, got $got)"; fi
 }
 
-TMPD="$(mktemp -d)"
-trap 'rm -rf "$TMPD"' EXIT
 cd "$TMPD"
 
 # ---------- _fx_best (edit distance over stdin candidates) ----------
@@ -117,6 +124,9 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
 (
   FX_PROVIDER=none
   check_rc "_fx_ai_ready none" 1 _fx_ai_ready
+  if [[ "${FX_TEST_FORCE_PROVIDER_FAILURE:-0}" -eq 1 ]]; then
+    check_rc "forced provider assertion failure" 0 false
+  fi
 )
 (
   FX_PROVIDER=openrouter
@@ -315,5 +325,7 @@ case "$out" in
   *) bad "sys prompt mentions DANGER prefix" ;;
 esac
 
+PASS="$(grep -c '^pass$' "$RESULTS" || true)"
+FAIL="$(grep -c '^fail$' "$RESULTS" || true)"
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 (( FAIL == 0 ))
