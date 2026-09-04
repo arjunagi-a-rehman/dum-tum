@@ -400,10 +400,14 @@ def _shell_literal(text: str, start: int) -> str:
 
 
 def rc_export_value(text: str, name: str) -> str:
-    marker = "# >>> fixit.zsh >>>"
-    start = text.find(marker)
-    if start >= 0:
-        text = text[start + len(marker):]
+    begin = "# >>> fixit.zsh >>>"
+    end = "# <<< fixit.zsh <<<"
+    lines = text.splitlines()
+    starts = [index for index, line in enumerate(lines) if line == begin]
+    ends = [index for index, line in enumerate(lines) if line == end]
+    if len(starts) != 1 or len(ends) != 1 or starts[0] >= ends[0]:
+        return ""
+    text = "\n".join(lines[starts[0] + 1:ends[0]])
     pattern = re.compile(r"(?m)^[ \t]*export[ \t]+" + re.escape(name) + r"=")
     quote = None
     escaped = False

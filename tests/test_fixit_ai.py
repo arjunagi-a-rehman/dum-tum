@@ -44,6 +44,45 @@ class TestHeadOf(unittest.TestCase):
         self.assertEqual(fixit_ai.head_of("sudo "), "sudo")
 
 
+class TestRcExportValue(unittest.TestCase):
+    def test_reads_only_inside_single_complete_managed_block(self):
+        text = "\n".join(
+            (
+                "export FX_PROVIDER='before'",
+                "# >>> fixit.zsh >>>",
+                "export FX_PROVIDER='openai'",
+                "# <<< fixit.zsh <<<",
+                "export FX_PROVIDER='after'",
+            )
+        )
+        self.assertEqual(fixit_ai.rc_export_value(text, "FX_PROVIDER"), "openai")
+
+    def test_rejects_absent_unbalanced_reversed_and_duplicate_blocks(self):
+        cases = (
+            "export FX_PROVIDER='outside'\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n",
+            "export FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n",
+            "# <<< fixit.zsh <<<\nexport FX_PROVIDER='openai'\n# >>> fixit.zsh >>>\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# >>> fixit.zsh >>>\n# <<< fixit.zsh <<<\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n# <<< fixit.zsh <<<\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n# >>> fixit.zsh >>>\nexport FX_PROVIDER='anthropic'\n# <<< fixit.zsh <<<\n",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(fixit_ai.rc_export_value(text, "FX_PROVIDER"), "")
+
+    def test_does_not_read_export_after_end_marker(self):
+        text = "\n".join(
+            (
+                "# >>> fixit.zsh >>>",
+                "export FX_MODEL='inside'",
+                "# <<< fixit.zsh <<<",
+                "export OPENAI_API_KEY='after'",
+            )
+        )
+        self.assertEqual(fixit_ai.rc_export_value(text, "OPENAI_API_KEY"), "")
+
+
 class TestHelpOptions(unittest.TestCase):
     def check(self, help_text, *options):
         import io
