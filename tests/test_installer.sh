@@ -486,6 +486,56 @@ env \
     --model key-model --key cli-key --shell bash > "$TMPD/key-precedence-output"
 assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" openrouter key-model "" cli-key
 
+smoke_bin="$TMPD/smoke-bin"
+mkdir -p "$smoke_bin"
+printf '%s\n' \
+  '#!/bin/sh' \
+  'if [ "${1:-}" = models ]; then' \
+  "  printf '%s\\n' 'stub/provider-model'" \
+  'else' \
+  "  printf '%s\\n' '{\"content\":\"ls -la\"}'" \
+  'fi' > "$smoke_bin/opencode"
+chmod +x "$smoke_bin/opencode"
+smoke_path="$smoke_bin:$(dirname "$(command -v python3)"):/usr/bin:/bin"
+
+fresh_smoke_home="$TMPD/fresh-smoke-home"
+fresh_smoke_target="$TMPD/fresh-smoke-target"
+mkdir -p "$fresh_smoke_home"
+env \
+  HOME="$fresh_smoke_home" FIXIT_HOME="$fresh_smoke_target" \
+  PATH="$smoke_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --provider opencode --model stub/provider-model \
+    --shell bash > "$TMPD/fresh-smoke-output"
+grep -q 'AI test OK' "$TMPD/fresh-smoke-output" || {
+  cat "$TMPD/fresh-smoke-output"
+  exit 1
+}
+if grep -q 'AI test returned no command' "$TMPD/fresh-smoke-output"; then
+  exit 1
+fi
+
+upgrade_smoke_home="$TMPD/upgrade-smoke-home"
+upgrade_smoke_target="$TMPD/upgrade-smoke-target"
+mkdir -p "$upgrade_smoke_home"
+env \
+  HOME="$upgrade_smoke_home" FIXIT_HOME="$upgrade_smoke_target" \
+  PATH="$smoke_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider opencode \
+    --model stub/provider-model --shell bash > "$TMPD/upgrade-smoke-seed-output"
+printf '%s\n' '# shellcheck shell=bash' '_fx_ai() { :; }' > "$upgrade_smoke_target/fixit-common.sh"
+env \
+  HOME="$upgrade_smoke_home" FIXIT_HOME="$upgrade_smoke_target" \
+  PATH="$smoke_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --provider opencode --model stub/provider-model \
+    --shell bash > "$TMPD/upgrade-smoke-output"
+grep -q 'AI test OK' "$TMPD/upgrade-smoke-output" || {
+  cat "$TMPD/upgrade-smoke-output"
+  exit 1
+}
+if grep -q 'AI test returned no command' "$TMPD/upgrade-smoke-output"; then
+  exit 1
+fi
+
 parse_home="$TMPD/safe-parse-home"
 parse_target="$TMPD/safe-parse-target"
 parse_marker="$TMPD/unsafe-parse-ran"
@@ -727,5 +777,305 @@ if env \
 fi
 assert_transaction_restored
 [[ -e "$tx_root/rc-commit-failed" ]]
+
+restore_fail_root="$TMPD/install-restore-failure"
+restore_fail_home="$restore_fail_root/home"
+restore_fail_parent="$restore_fail_root/runtime-parent"
+restore_fail_target="$restore_fail_parent/fixit"
+restore_fail_bin="$restore_fail_root/bin"
+mkdir -p "$restore_fail_home" "$restore_fail_parent" "$restore_fail_bin"
+env \
+  HOME="$restore_fail_home" FIXIT_HOME="$restore_fail_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$restore_fail_root/seed-output"
+printf '# previous-runtime\n' >> "$restore_fail_target/fixit-common.sh"
+cp -p "$restore_fail_home/.bashrc" "$restore_fail_root/bashrc-before"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'src="${1:-}"' \
+  'dest=""' \
+  'for arg in "$@"; do dest="$arg"; done' \
+  'if [[ "$dest" == "$TX_TEST_INSTALL" && ( "$src" == */.dum-tum-install.* || "$src" == */.dum-tum-backup.* ) ]]; then' \
+  '  exit 1' \
+  'fi' \
+  'exec /bin/mv "$@"' > "$restore_fail_bin/mv"
+chmod +x "$restore_fail_bin/mv"
+if env \
+  TX_TEST_INSTALL="$restore_fail_target" \
+  HOME="$restore_fail_home" FIXIT_HOME="$restore_fail_target" \
+  PATH="$restore_fail_bin:/usr/bin:/bin" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$restore_fail_root/output" 2>&1; then
+  exit 1
+fi
+restore_fail_backup="$(find "$restore_fail_parent" -maxdepth 1 -type d -name '.dum-tum-backup.*' -print -quit)"
+[[ -n "$restore_fail_backup" && ! -e "$restore_fail_target" ]]
+grep -qxF '# previous-runtime' "$restore_fail_backup/fixit-common.sh"
+cmp "$restore_fail_root/bashrc-before" "$restore_fail_home/.bashrc"
+grep -q 'rollback is incomplete' "$restore_fail_root/output"
+grep -qF "recovery backup retained at $restore_fail_backup" "$restore_fail_root/output"
+if grep -q 'Installation failed; restored the previous runtime' "$restore_fail_root/output"; then
+  exit 1
+fi
+
+rc_restore_fail_root="$TMPD/install-rc-restore-failure"
+rc_restore_fail_home="$rc_restore_fail_root/home"
+rc_restore_fail_target="$rc_restore_fail_root/runtime"
+rc_restore_fail_bin="$rc_restore_fail_root/bin"
+mkdir -p "$rc_restore_fail_home" "$rc_restore_fail_bin"
+rc_restore_profile="$(cd -P "$rc_restore_fail_home" && pwd)/.bash_profile"
+rc_restore_bashrc="$(cd -P "$rc_restore_fail_home" && pwd)/.bashrc"
+env \
+  HOME="$rc_restore_fail_home" FIXIT_HOME="$rc_restore_fail_target" \
+  PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell both \
+    > "$rc_restore_fail_root/seed-output"
+cp -p "$rc_restore_fail_home/.zshrc" "$rc_restore_fail_root/zshrc-before"
+cp -p "$rc_restore_fail_home/.bashrc" "$rc_restore_fail_root/bashrc-before"
+cp -p "$rc_restore_fail_home/.bash_profile" "$rc_restore_fail_root/profile-before"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'src="${1:-}"' \
+  'dest=""' \
+  'for arg in "$@"; do dest="$arg"; done' \
+  'if [[ "$src" == */.dum-tum-rc.* && "$dest" == "$TX_TEST_PROFILE" ]]; then exit 1; fi' \
+  'if [[ "$src" == */.dum-tum-backup.* && "$dest" == "$TX_TEST_BASHRC" ]]; then exit 1; fi' \
+  'exec /bin/mv "$@"' > "$rc_restore_fail_bin/mv"
+chmod +x "$rc_restore_fail_bin/mv"
+if env \
+  TX_TEST_PROFILE="$rc_restore_profile" TX_TEST_BASHRC="$rc_restore_bashrc" \
+  HOME="$rc_restore_fail_home" FIXIT_HOME="$rc_restore_fail_target" \
+  PATH="$rc_restore_fail_bin:$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
+    --model new-model --shell both > "$rc_restore_fail_root/output" 2>&1; then
+  exit 1
+fi
+rc_restore_backup="$(find "$rc_restore_fail_home" -maxdepth 1 -type f \
+  -name '.dum-tum-backup.*' -print -quit)"
+[[ -n "$rc_restore_backup" ]]
+rc_restore_backup_real="$(cd -P "$(dirname "$rc_restore_backup")" && pwd)/$(basename "$rc_restore_backup")"
+cmp "$rc_restore_fail_root/bashrc-before" "$rc_restore_backup"
+cmp "$rc_restore_fail_root/zshrc-before" "$rc_restore_fail_home/.zshrc"
+cmp "$rc_restore_fail_root/profile-before" "$rc_restore_fail_home/.bash_profile"
+assert_runtime_matches_repo "$rc_restore_fail_target"
+grep -qF "recovery backup retained at $rc_restore_backup_real" "$rc_restore_fail_root/output"
+grep -q 'rollback is incomplete' "$rc_restore_fail_root/output"
+if grep -q 'Installation failed; restored the previous runtime' "$rc_restore_fail_root/output"; then
+  exit 1
+fi
+
+assert_uninstall_commit_rollback() {
+  local fail_at="$1" root="$TMPD/uninstall-commit-$1"
+  local home="$root/home" target="$root/runtime" bin="$root/bin" debris runtime_file
+  local zsh_mode bash_mode profile_mode
+  mkdir -p "$home" "$bin"
+  env \
+    HOME="$home" FIXIT_HOME="$target" PATH="$darwin_path" SHELL=/bin/bash \
+    "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell both \
+      > "$root/seed-output"
+  cp -Rp "$target" "$root/runtime-before"
+  cp -p "$home/.zshrc" "$root/zshrc-before"
+  cp -p "$home/.bash_profile" "$root/profile-before"
+  cp -p "$home/.bashrc" "$root/bashrc-before"
+  zsh_mode="$(file_mode "$home/.zshrc")"
+  profile_mode="$(file_mode "$home/.bash_profile")"
+  bash_mode="$(file_mode "$home/.bashrc")"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'src="${1:-}"' \
+    'dest=""' \
+    'for arg in "$@"; do dest="$arg"; done' \
+    'if [[ "$src" == */.dum-tum-rc.* ]]; then' \
+    '  count=0' \
+    '  [[ ! -f "$TX_TEST_COUNTER" ]] || IFS= read -r count < "$TX_TEST_COUNTER"' \
+    '  count=$((count+1))' \
+    '  printf "%s\\n" "$count" > "$TX_TEST_COUNTER"' \
+    '  if [[ "$count" -eq "$TX_TEST_FAIL_AT" ]]; then exit 1; fi' \
+    'fi' \
+    'exec /bin/mv "$@"' > "$bin/mv"
+  chmod +x "$bin/mv"
+  if env \
+    TX_TEST_FAIL_AT="$fail_at" TX_TEST_COUNTER="$root/commit-count" \
+    HOME="$home" FIXIT_HOME="$target" PATH="$bin:$darwin_path" SHELL=/bin/bash \
+    "$ROOT/install.sh" --uninstall > "$root/output" 2>&1; then
+    exit 1
+  fi
+  cmp "$root/zshrc-before" "$home/.zshrc"
+  cmp "$root/profile-before" "$home/.bash_profile"
+  cmp "$root/bashrc-before" "$home/.bashrc"
+  [[ "$(file_mode "$home/.zshrc")" == "$zsh_mode" ]]
+  [[ "$(file_mode "$home/.bash_profile")" == "$profile_mode" ]]
+  [[ "$(file_mode "$home/.bashrc")" == "$bash_mode" ]]
+  assert_runtime_matches_repo "$target"
+  for runtime_file in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py .dum-tum-install; do
+    cmp "$root/runtime-before/$runtime_file" "$target/$runtime_file"
+    [[ "$(file_mode "$root/runtime-before/$runtime_file")" == \
+       "$(file_mode "$target/$runtime_file")" ]]
+  done
+  grep -q 'Uninstall failed; restored the installation and shell configuration' "$root/output"
+  debris="$(find "$root" \
+    \( -name '.dum-tum-uninstall.*' -o -name '.dum-tum-backup.*' -o -name '.dum-tum-rc.*' \) \
+    -print -quit)"
+  [[ -z "$debris" ]]
+}
+
+assert_uninstall_commit_rollback 2
+assert_uninstall_commit_rollback 3
+
+relative_root="$TMPD/relative-fixit-home"
+mkdir -p "$relative_root/home" "$relative_root/work"
+if (
+  cd "$relative_root/work"
+  env HOME="$relative_root/home" FIXIT_HOME=runtime PATH=/usr/bin:/bin SHELL=/bin/bash \
+    "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash
+) > "$relative_root/output" 2>&1; then
+  exit 1
+fi
+grep -q 'FIXIT_HOME must be an absolute path' "$relative_root/output"
+[[ ! -e "$relative_root/work/runtime" && ! -e "$relative_root/home/.bashrc" ]]
+
+exclusive_root="$TMPD/exclusive-runtime"
+exclusive_home="$exclusive_root/home"
+exclusive_target="$exclusive_root/runtime"
+mkdir -p "$exclusive_home"
+env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$exclusive_root/seed-output"
+printf 'must survive\n' > "$exclusive_target/user-data"
+cp -Rp "$exclusive_target" "$exclusive_root/runtime-before"
+cp -p "$exclusive_home/.bashrc" "$exclusive_root/bashrc-before"
+if env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$exclusive_root/update-output" 2>&1; then
+  exit 1
+fi
+grep -q 'unexpected entries' "$exclusive_root/update-output"
+diff -r "$exclusive_root/runtime-before" "$exclusive_target"
+cmp "$exclusive_root/bashrc-before" "$exclusive_home/.bashrc"
+if env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$exclusive_root/uninstall-output" 2>&1; then
+  exit 1
+fi
+grep -q 'unexpected entries' "$exclusive_root/uninstall-output"
+grep -qxF 'must survive' "$exclusive_target/user-data"
+cmp "$exclusive_root/bashrc-before" "$exclusive_home/.bashrc"
+
+smoke_root="$TMPD/smoke-status"
+smoke_home="$smoke_root/home"
+smoke_bin="$smoke_root/bin"
+mkdir -p "$smoke_home" "$smoke_bin"
+printf '%s\n' \
+  '#!/bin/bash' \
+  'if [[ "${1:-}" == -n ]]; then exec /bin/bash "$@"; fi' \
+  'if [[ "${1:-}" == -c ]]; then' \
+  '  printf "ls -la\n"' \
+  '  printf "staged smoke failed\n" >&2' \
+  '  exit 17' \
+  'fi' \
+  'exec /bin/bash "$@"' > "$smoke_bin/bash"
+chmod +x "$smoke_bin/bash"
+env HOME="$smoke_home" FIXIT_HOME="$smoke_root/runtime" \
+  PATH="$smoke_bin:/usr/bin:/bin" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --provider openrouter --model test-model \
+    --key test-key --shell bash > "$smoke_root/output" 2>&1
+grep -q 'staged smoke failed' "$smoke_root/output"
+grep -q 'AI test returned no command' "$smoke_root/output"
+if grep -q 'AI test OK' "$smoke_root/output"; then
+  exit 1
+fi
+
+assert_signal_boundary() {
+  local operation="$1" boundary="$2" root
+  root="$TMPD/signal-$operation-$boundary"
+  local home="$root/home" target="$root/runtime" bin="$root/bin" bashrc
+  mkdir -p "$home" "$bin"
+  env HOME="$home" FIXIT_HOME="$target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+    "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+      > "$root/seed-output"
+  cp -Rp "$target" "$root/runtime-before"
+  cp -p "$home/.bashrc" "$root/bashrc-before"
+  [[ ! -f "$home/.bash_profile" ]] || cp -p "$home/.bash_profile" "$root/profile-before"
+  bashrc="$(cd -P "$home" && pwd)/.bashrc"
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'src="${1:-}"' \
+    'dest=""' \
+    'for arg in "$@"; do dest="$arg"; done' \
+    '/bin/mv "$@"' \
+    'rc=$?' \
+    'match=0' \
+    'if [[ "$TX_SIGNAL_BOUNDARY" == runtime-install && "$src" == */.dum-tum-install.* && "$dest" == "$TX_SIGNAL_TARGET" ]]; then match=1; fi' \
+    'if [[ "$TX_SIGNAL_BOUNDARY" == rc-install && "$src" == */.dum-tum-rc.* && "$dest" == "$TX_SIGNAL_BASHRC" ]]; then match=1; fi' \
+    'if [[ "$TX_SIGNAL_BOUNDARY" == runtime-uninstall && "$dest" == */.dum-tum-uninstall.*/install ]]; then match=1; fi' \
+    'if [[ "$TX_SIGNAL_BOUNDARY" == rc-uninstall && "$src" == */.dum-tum-rc.* && "$dest" == "$TX_SIGNAL_BASHRC" ]]; then match=1; fi' \
+    'if [[ "$rc" -eq 0 && "$match" -eq 1 && ! -e "$TX_SIGNAL_FLAG" ]]; then' \
+    '  touch "$TX_SIGNAL_FLAG"' \
+    '  kill -TERM "$PPID"' \
+    'fi' \
+    'exit "$rc"' > "$bin/mv"
+  chmod +x "$bin/mv"
+  if [[ "$operation" == install ]]; then
+    if env TX_SIGNAL_BOUNDARY="$boundary-$operation" TX_SIGNAL_TARGET="$target" \
+      TX_SIGNAL_BASHRC="$bashrc" TX_SIGNAL_FLAG="$root/signalled" \
+      HOME="$home" FIXIT_HOME="$target" PATH="$bin:/usr/bin:/bin" SHELL=/bin/bash \
+      "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+        > "$root/output" 2>&1; then
+      exit 1
+    fi
+  else
+    if env TX_SIGNAL_BOUNDARY="$boundary-$operation" TX_SIGNAL_TARGET="$target" \
+      TX_SIGNAL_BASHRC="$bashrc" TX_SIGNAL_FLAG="$root/signalled" \
+      HOME="$home" FIXIT_HOME="$target" PATH="$bin:/usr/bin:/bin" SHELL=/bin/bash \
+      "$ROOT/install.sh" --uninstall > "$root/output" 2>&1; then
+      exit 1
+    fi
+  fi
+  [[ -e "$root/signalled" ]]
+  diff -r "$root/runtime-before" "$target"
+  cmp "$root/bashrc-before" "$home/.bashrc"
+  if [[ -f "$root/profile-before" ]]; then
+    cmp "$root/profile-before" "$home/.bash_profile"
+  fi
+  grep -q 'restored the .*shell configuration' "$root/output"
+}
+
+assert_signal_boundary install runtime
+assert_signal_boundary install rc
+assert_signal_boundary uninstall runtime
+assert_signal_boundary uninstall rc
+
+partial_root="$TMPD/partial-uninstall"
+partial_home="$partial_root/home"
+partial_target="$partial_root/runtime"
+partial_bin="$partial_root/bin"
+mkdir -p "$partial_home" "$partial_bin"
+env HOME="$partial_home" FIXIT_HOME="$partial_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$partial_root/seed-output"
+cp -p "$partial_home/.bashrc" "$partial_root/bashrc-before"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'if [[ "${1:-}" == -rf && "${2:-}" == */.dum-tum-uninstall.* ]]; then' \
+  '  /bin/rm -f "$2/install/fixit-ai.py"' \
+  '  exit 1' \
+  'fi' \
+  'exec /bin/rm "$@"' > "$partial_bin/rm"
+chmod +x "$partial_bin/rm"
+if env HOME="$partial_home" FIXIT_HOME="$partial_target" \
+  PATH="$partial_bin:/usr/bin:/bin" SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$partial_root/output" 2>&1; then
+  exit 1
+fi
+[[ ! -e "$partial_target" ]]
+partial_quarantine="$(find "$partial_root" -maxdepth 1 -type d \
+  -name '.dum-tum-uninstall.*' -print -quit)"
+[[ -n "$partial_quarantine" && -d "$partial_quarantine/install" ]]
+[[ ! -e "$partial_quarantine/install/fixit-ai.py" ]]
+cmp "$partial_root/bashrc-before" "$partial_home/.bashrc"
+grep -q 'rollback is incomplete' "$partial_root/output"
+grep -q 'remaining recovery data is retained' "$partial_root/output"
+if grep -q 'Uninstall failed; restored' "$partial_root/output"; then
+  exit 1
+fi
 
 printf 'Installer tests passed\n'
