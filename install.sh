@@ -14,8 +14,11 @@ FIXIT_HOME_WAS_SET="${FIXIT_HOME+x}"
 INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 BASHRC="$HOME/.bashrc"
+BASH_PROFILE="$HOME/.bash_profile"
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
+BASH_PROFILE_MARKER_BEGIN="# >>> dum-tum bashrc loader >>>"
+BASH_PROFILE_MARKER_END="# <<< dum-tum bashrc loader <<<"
 INSTALL_SENTINEL=".dum-tum-install"
 INSTALL_SENTINEL_VALUE="dum-tum-install-v1"
 UNINSTALL_TARGET=""
@@ -40,6 +43,10 @@ PROVIDER_FROM_CLI=0
 MODEL_FROM_CLI=0
 KEY_FROM_CLI=0
 VARIANT_FROM_CLI=0
+PROVIDER_FROM_ENV=0
+MODEL_FROM_ENV=0
+VARIANT_FROM_ENV=0
+KEY_FROM_ENV=0
 ASSUME_YES=0
 SKIP_DEPS=0
 SKIP_AI_TEST=0
@@ -122,11 +129,13 @@ key_var_for_provider() {
 detect_key_env() {
   API_KEY=""
   KEY_ENV_VAR=""
+  KEY_FROM_ENV=0
   local kv
   for kv in OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY; do
     if [[ -n "${!kv:-}" ]]; then
       API_KEY="${!kv}"
       KEY_ENV_VAR="$kv"
+      KEY_FROM_ENV=1
       return 0
     fi
   done
@@ -138,12 +147,15 @@ if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
 fi
 if [[ "$PROVIDER_FROM_CLI" -eq 0 && -n "${FX_PROVIDER:-}" ]]; then
   PROVIDER="$FX_PROVIDER"
+  PROVIDER_FROM_ENV=1
 fi
 if [[ "$MODEL_FROM_CLI" -eq 0 && -n "${FX_MODEL:-}" ]]; then
   MODEL="$FX_MODEL"
+  MODEL_FROM_ENV=1
 fi
 if [[ "$VARIANT_FROM_CLI" -eq 0 && -n "${FX_VARIANT:-}" ]]; then
   VARIANT="$FX_VARIANT"
+  VARIANT_FROM_ENV=1
 fi
 
 info()  { printf '\033[36m==>\033[0m %s\n' "$*"; }
@@ -164,6 +176,7 @@ validate_single_line_inputs() {
   require_single_line FIXIT_HOME "$INSTALL_DIR" || return 1
   require_single_line ZSHRC "$ZSHRC" || return 1
   require_single_line BASHRC "$BASHRC" || return 1
+  require_single_line BASH_PROFILE "$BASH_PROFILE" || return 1
   require_single_line FIXIT_RAW "$REPO_RAW" || return 1
   require_single_line provider "$PROVIDER" || return 1
   require_single_line model "$MODEL" || return 1
@@ -205,15 +218,15 @@ resolve_rc_file() {
   printf '%s/%s\n' "$dir" "$(basename "$path")"
 }
 
-validate_managed_block() {
-  local rc_file="$1" target
+validate_marked_block() {
+  local rc_file="$1" begin="$2" end="$3" label="$4" target
   target="$(resolve_rc_file "$rc_file")" || return 1
   [[ -e "$target" ]] || return 0
   if [[ ! -f "$target" ]]; then
     err "Refusing to update non-file rc path: $rc_file"
     return 1
   fi
-  if ! awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
+  if ! awk -v begin="$begin" -v end="$end" '
     index($0, begin) {
       if ($0 != begin || state != 0) bad=1
       begins++
@@ -232,14 +245,22 @@ validate_managed_block() {
       exit 1
     }
   ' "$target"; then
-    err "Malformed dum-tum block in $rc_file; leaving it unchanged"
+    err "Malformed $label block in $rc_file; leaving it unchanged"
     return 1
   fi
+}
+
+validate_managed_block() {
+  validate_marked_block "$1" "$MARKER_BEGIN" "$MARKER_END" dum-tum
 }
 
 preflight_rc_updates() {
   [[ "$DO_ZSH" -eq 0 ]] || validate_managed_block "$ZSHRC" || return 1
   [[ "$DO_BASH" -eq 0 ]] || validate_managed_block "$BASHRC" || return 1
+  if [[ "$OS" == Darwin && "$DO_BASH" -eq 1 ]]; then
+    validate_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
+      "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' || return 1
+  fi
 }
 
 preflight_rc_uninstall() {
@@ -248,6 +269,106 @@ preflight_rc_uninstall() {
   fi
   if [[ -e "$BASHRC" || -L "$BASHRC" ]]; then
     validate_managed_block "$BASHRC" || return 1
+  fi
+  if [[ -e "$BASH_PROFILE" || -L "$BASH_PROFILE" ]]; then
+    validate_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
+      "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' || return 1
+  fi
+}
+
+managed_assignment_line() {
+  local rc_file="$1" var="$2" target
+  target="$(resolve_rc_file "$rc_file")" || return 1
+  [[ -f "$target" ]] || return 1
+  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v var="$var" '
+    $0 == begin { inside=1; next }
+    $0 == end { inside=0; next }
+    inside && $0 ~ "^[[:space:]]*export[[:space:]]+" var "=" { value=$0; found=1 }
+    END { if (found) print value; else exit 1 }
+  ' "$target"
+}
+
+read_managed_value() {
+  local rc_file="$1" var="$2" line
+  line="$(managed_assignment_line "$rc_file" "$var")" || return 1
+  printf '%s\n' "$line" | python3 -c '
+import shlex
+import sys
+
+name = sys.argv[1]
+try:
+    words = shlex.split(sys.stdin.read(), comments=False, posix=True)
+except ValueError:
+    raise SystemExit(1)
+if len(words) != 2 or words[0] != "export":
+    raise SystemExit(1)
+prefix = name + "="
+if not words[1].startswith(prefix):
+    raise SystemExit(1)
+sys.stdout.write(words[1][len(prefix):])
+' "$var"
+}
+
+load_existing_config() {
+  local login_shell rc candidate normalized selected_provider="" selected_provider_rc="" key_var
+  local requested_provider authoritative_rc=""
+  local -a rc_files=()
+  login_shell="$(basename "${SHELL:-}")"
+  if [[ "$login_shell" == bash && "$DO_BASH" -eq 1 ]]; then
+    rc_files+=("$BASHRC")
+  elif [[ "$login_shell" == zsh && "$DO_ZSH" -eq 1 ]]; then
+    rc_files+=("$ZSHRC")
+  fi
+  if [[ "$DO_ZSH" -eq 1 && "$login_shell" != zsh ]]; then
+    rc_files+=("$ZSHRC")
+  fi
+  if [[ "$DO_BASH" -eq 1 && "$login_shell" != bash ]]; then
+    rc_files+=("$BASHRC")
+  fi
+
+  for rc in "${rc_files[@]}"; do
+    if candidate="$(read_managed_value "$rc" FX_PROVIDER)"; then
+      normalized="$(normalize_provider "$candidate")"
+      [[ -n "$normalized" ]] || continue
+      if [[ -z "$selected_provider" ]]; then
+        selected_provider="$normalized"
+        selected_provider_rc="$rc"
+      elif [[ "$normalized" != "$selected_provider" ]]; then
+        warn "Selected rc files disagree on FX_PROVIDER; preferring $selected_provider_rc"
+      fi
+    fi
+  done
+  requested_provider="$(normalize_provider "$PROVIDER")"
+  if [[ -n "$requested_provider" ]]; then
+    for rc in "${rc_files[@]}"; do
+      if candidate="$(read_managed_value "$rc" FX_PROVIDER)" && \
+         [[ "$(normalize_provider "$candidate")" == "$requested_provider" ]]; then
+        authoritative_rc="$rc"
+        break
+      fi
+    done
+  elif [[ "$PROVIDER_FROM_CLI" -eq 0 && "$PROVIDER_FROM_ENV" -eq 0 && -n "$selected_provider" ]]; then
+    PROVIDER="$selected_provider"
+    authoritative_rc="$selected_provider_rc"
+    info "Keeping existing FX_PROVIDER=$PROVIDER from $selected_provider_rc"
+  fi
+
+  if [[ -n "$authoritative_rc" && "$MODEL_FROM_CLI" -eq 0 && "$MODEL_FROM_ENV" -eq 0 && -z "$MODEL" ]] && \
+     candidate="$(read_managed_value "$authoritative_rc" FX_MODEL)"; then
+    MODEL="$candidate"
+    info "Keeping existing FX_MODEL from $authoritative_rc"
+  fi
+  if [[ -n "$authoritative_rc" && "$VARIANT_FROM_CLI" -eq 0 && "$VARIANT_FROM_ENV" -eq 0 && -z "$VARIANT" ]] && \
+     candidate="$(read_managed_value "$authoritative_rc" FX_VARIANT)"; then
+    VARIANT="$candidate"
+    info "Keeping existing FX_VARIANT from $authoritative_rc"
+  fi
+  key_var="$(key_var_for_provider "${requested_provider:-$PROVIDER}")"
+  if [[ -n "$authoritative_rc" && -n "$key_var" && "$KEY_FROM_CLI" -eq 0 && "$KEY_FROM_ENV" -eq 0 && -z "$API_KEY" ]] && \
+     candidate="$(read_managed_value "$authoritative_rc" "$key_var")"; then
+    API_KEY="$candidate"
+    KEY_ENV_VAR="$key_var"
+    info "Keeping existing $key_var from $authoritative_rc"
   fi
 }
 
@@ -413,12 +534,6 @@ select_shells() {
       exit 1
       ;;
   esac
-  # zsh selected but missing → fall back to bash
-  if [[ "$DO_ZSH" -eq 1 ]] && ! have zsh; then
-    warn "zsh not found — configuring bash only"
-    DO_ZSH=0
-    DO_BASH=1
-  fi
   local targets=()
   [[ "$DO_ZSH" -eq 1 ]] && targets+=("zsh")
   [[ "$DO_BASH" -eq 1 ]] && targets+=("bash")
@@ -426,11 +541,18 @@ select_shells() {
 }
 
 install_deps() {
-  [[ "$SKIP_DEPS" -eq 1 ]] && return 0
   local need=()
   [[ "$DO_ZSH" -eq 1 ]] && { have zsh || need+=(zsh); }
   have python3 || need+=(python3)
   have curl    || need+=(curl)
+
+  if [[ "$SKIP_DEPS" -eq 1 ]]; then
+    if [[ ${#need[@]} -gt 0 ]]; then
+      err "Missing required dependencies with --skip-deps: ${need[*]}"
+      return 1
+    fi
+    return 0
+  fi
 
   if [[ ${#need[@]} -eq 0 ]]; then
     ok "Dependencies present"
@@ -471,10 +593,10 @@ install_deps() {
     exit 1
   fi
 
-  { [[ "$DO_ZSH" -eq 0 ]] || have zsh; } && have python3 && have curl || {
+  if ! { { [[ "$DO_ZSH" -eq 0 ]] || have zsh; } && have python3 && have curl; }; then
     err "Still missing tools after install attempt."
     exit 1
-  }
+  fi
   ok "Dependencies installed"
 }
 
@@ -581,16 +703,6 @@ select_provider() {
       ok "Provider: $PROVIDER"
       return 0
     fi
-    if [[ -f "$ZSHRC" ]] && grep -qE '^\s*export FX_PROVIDER=' "$ZSHRC" 2>/dev/null; then
-      local existing
-      existing="$(grep -E '^\s*export FX_PROVIDER=' "$ZSHRC" | tail -1 | sed -E 's/.*FX_PROVIDER=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
-      existing="$(normalize_provider "$existing")"
-      if [[ -n "$existing" ]]; then
-        PROVIDER="$existing"
-        ok "Keeping existing FX_PROVIDER=$PROVIDER from $ZSHRC"
-        return 0
-      fi
-    fi
     if [[ -n "$API_KEY" ]]; then
       case "${KEY_ENV_VAR:-OPENROUTER_API_KEY}" in
         OPENAI_API_KEY)                  PROVIDER="openai" ;;
@@ -617,7 +729,6 @@ select_provider() {
   # Interactive: always ask (env/zshrc only seed the default choice)
   local hint=""
   p="$(normalize_provider "$PROVIDER")"
-  [[ -z "$p" && -f "$ZSHRC" ]] && p="$(normalize_provider "$(grep -E '^\s*export FX_PROVIDER=' "$ZSHRC" 2>/dev/null | tail -1 | sed -E 's/.*FX_PROVIDER=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')")"
   [[ -n "$p" ]] && hint="$p"
 
   echo ""
@@ -707,9 +818,6 @@ maybe_ask_key() {
   fi
 
   if ! is_interactive; then
-    if [[ -z "$API_KEY" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
-      API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
-    fi
     if [[ -n "$API_KEY" ]]; then
       ok "$label API key provided"
       return 0
@@ -721,10 +829,6 @@ maybe_ask_key() {
 
   local hint=""
   [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
-  if [[ -z "$hint" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
-    hint="(key already in zshrc — Enter keeps it, or paste a new one)"
-    API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
-  fi
 
   echo ""
   echo "$label API key enables natural language."
@@ -1173,6 +1277,144 @@ test_ai() {
   esac
 }
 
+write_plain_marked_block() {
+  local rc_file="$1" begin="$2" end="$3" label="$4" block="$5"
+  local target dir tmp repl_file mode
+  validate_marked_block "$rc_file" "$begin" "$end" "$label" || return 1
+  target="$(resolve_rc_file "$rc_file")" || return 1
+  dir="$(dirname "$target")"
+  tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 1
+  repl_file="$(mktemp "$dir/.dum-tum-block.XXXXXX")" || {
+    rm -f "$tmp"
+    return 1
+  }
+  printf '%s\n' "$block" > "$repl_file" || {
+    rm -f "$tmp" "$repl_file"
+    return 1
+  }
+  if [[ -f "$target" ]] && grep -qxF "$begin" "$target" 2>/dev/null; then
+    awk -v begin="$begin" -v end="$end" -v rf="$repl_file" '
+      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
+      $0 == end { skip=0; next }
+      !skip { print }
+    ' "$target" > "$tmp" || {
+      rm -f "$tmp" "$repl_file"
+      return 1
+    }
+  else
+    if [[ -f "$target" ]]; then
+      cat "$target" > "$tmp" || {
+        rm -f "$tmp" "$repl_file"
+        return 1
+      }
+    fi
+    printf '\n%s\n' "$block" >> "$tmp" || {
+      rm -f "$tmp" "$repl_file"
+      return 1
+    }
+  fi
+  rm -f "$repl_file"
+  mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
+  if [[ -n "$mode" ]]; then
+    chmod "$mode" "$tmp" || {
+      rm -f "$tmp"
+      return 1
+    }
+  fi
+  mv "$tmp" "$target" || {
+    rm -f "$tmp"
+    return 1
+  }
+  ok "Configured $rc_file"
+}
+
+bash_profile_sources_bashrc() {
+  local target bashrc_target
+  target="$(resolve_rc_file "$BASH_PROFILE")" || return 1
+  bashrc_target="$(resolve_rc_file "$BASHRC")" || return 1
+  [[ -f "$target" ]] || return 1
+  python3 -c '
+import os
+import shlex
+import sys
+
+profile, bashrc_target, home = sys.argv[1:]
+dollar = chr(36)
+
+def sourced_path(raw):
+    if len(raw) >= 2 and raw[0] == raw[-1] == "\047":
+        value = raw[1:-1]
+    elif len(raw) >= 2 and raw[0] == raw[-1] == "\042":
+        value = raw[1:-1]
+        if "\\" in value:
+            return None
+        value = value.replace(dollar + "{HOME}", home).replace(dollar + "HOME", home)
+        if dollar in value or "`" in value:
+            return None
+    else:
+        try:
+            values = shlex.split(raw, comments=False, posix=True)
+        except ValueError:
+            return None
+        if len(values) != 1:
+            return None
+        value = values[0]
+        if dollar + "(" in value or "`" in value:
+            return None
+        value = value.replace(dollar + "{HOME}", home).replace(dollar + "HOME", home)
+        if value == "~":
+            value = home
+        elif value.startswith("~/"):
+            value = os.path.join(home, value[2:])
+        if dollar in value or "`" in value:
+            return None
+    if not os.path.isabs(value):
+        return None
+    return os.path.realpath(value)
+
+with open(profile, encoding="utf-8", errors="surrogateescape") as handle:
+    for line in handle:
+        lexer = shlex.shlex(line, posix=False)
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        try:
+            words = list(lexer)
+        except ValueError:
+            continue
+        if len(words) != 2 or words[0] not in ("source", "."):
+            continue
+        if sourced_path(words[1]) == bashrc_target:
+            raise SystemExit(0)
+raise SystemExit(1)
+' "$target" "$bashrc_target" "$HOME"
+}
+
+ensure_bash_profile_loader() {
+  [[ "$OS" == Darwin && "$DO_BASH" -eq 1 ]] || return 0
+  local target bashrc_target block
+  target="$(resolve_rc_file "$BASH_PROFILE")" || return 1
+  bashrc_target="$(resolve_rc_file "$BASHRC")" || return 1
+  if [[ "$target" == "$bashrc_target" ]]; then
+    return 0
+  fi
+  if [[ -f "$target" ]] && ! grep -qxF "$BASH_PROFILE_MARKER_BEGIN" "$target" 2>/dev/null && \
+     bash_profile_sources_bashrc; then
+    ok "$BASH_PROFILE already loads $BASHRC"
+    return 0
+  fi
+  block=$(cat <<EOF
+$BASH_PROFILE_MARKER_BEGIN
+if [[ -z "\${_DUM_TUM_BASHRC_LOADED:-}" && -r $(shell_quote "$BASHRC") ]]; then
+  _DUM_TUM_BASHRC_LOADED=1
+  source $(shell_quote "$BASHRC")
+fi
+$BASH_PROFILE_MARKER_END
+EOF
+)
+  write_plain_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
+    "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' "$block"
+}
+
 # write_rc_block <rc-file> <adapter-file>
 write_rc_block() {
   local rc_file="$1" adapter="$2"
@@ -1289,6 +1531,7 @@ write_rc_blocks() {
   if [[ "$DO_BASH" -eq 1 ]]; then
     write_rc_block "$BASHRC" "fixit.bash" || return 1
   fi
+  ensure_bash_profile_loader
 }
 
 ensure_shell_default() {
@@ -1371,17 +1614,17 @@ Docs: https://github.com/arjunagi-a-rehman/dum-tum
 EOF
 }
 
-uninstall_rc() {
-  local rc_file="$1" target dir tmp mode
+remove_marked_block() {
+  local rc_file="$1" begin="$2" end="$3" label="$4" target dir tmp mode
   [[ -e "$rc_file" || -L "$rc_file" ]] || return 1
-  validate_managed_block "$rc_file" || return 2
+  validate_marked_block "$rc_file" "$begin" "$end" "$label" || return 2
   target="$(resolve_rc_file "$rc_file")" || return 2
   [[ -f "$target" ]] || return 1
-  grep -qxF "$MARKER_BEGIN" "$target" 2>/dev/null || return 1
+  grep -qxF "$begin" "$target" 2>/dev/null || return 1
   dir="$(dirname "$target")"
   mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
   tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 2
-  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
+  awk -v begin="$begin" -v end="$end" '
       $0 == begin { skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
@@ -1400,6 +1643,10 @@ uninstall_rc() {
   ok "Updated $rc_file (removed dum-tum config)"
 }
 
+uninstall_rc() {
+  remove_marked_block "$1" "$MARKER_BEGIN" "$MARKER_END" dum-tum
+}
+
 uninstall_fixit() {
   info "Uninstalling fixit…"
   local removed=0 rc=0
@@ -1407,6 +1654,14 @@ uninstall_fixit() {
   validate_uninstall_target || return 1
   preflight_rc_uninstall || return 1
   uninstall_rc "$ZSHRC" || rc=$?
+  case "$rc" in
+    0) removed=1 ;;
+    1) ;;
+    *) return "$rc" ;;
+  esac
+  rc=0
+  remove_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
+    "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' || rc=$?
   case "$rc" in
     0) removed=1 ;;
     1) ;;
@@ -1448,6 +1703,7 @@ main() {
   preflight_rc_updates
   validate_install_target
   install_deps
+  load_existing_config
   install_script
   detect_ai_clis
   select_provider

@@ -377,4 +377,228 @@ if [[ -n "$(find "$TMPD" -name '.dum-tum-uninstall.*' -print -quit)" ]]; then
   exit 1
 fi
 
+run_clean_upgrade() {
+  local home="$1" install_dir="$2" login_shell="$3" shell_choice="$4" output="$5"
+  env -u FX_PROVIDER -u FX_MODEL -u FX_VARIANT \
+    -u OPENROUTER_API_KEY -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+    -u GEMINI_API_KEY -u GOOGLE_API_KEY \
+    HOME="$home" \
+    FIXIT_HOME="$install_dir" \
+    PATH=/usr/bin:/bin \
+    SHELL="$login_shell" \
+    "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --shell "$shell_choice" > "$output"
+}
+
+bash_preserve_home="$TMPD/bash-preserve-home"
+bash_preserve_target="$TMPD/bash-preserve-target"
+mkdir -p "$bash_preserve_home"
+env \
+  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
+    --model bash-preserved-model --key bash-preserved-key --shell bash > "$TMPD/bash-seed-output"
+run_clean_upgrade "$bash_preserve_home" "$bash_preserve_target" /bin/bash bash "$TMPD/bash-upgrade-output"
+assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" openrouter \
+  bash-preserved-model "" bash-preserved-key
+grep -qF "Keeping existing FX_PROVIDER=openrouter from $bash_preserve_home/.bashrc" \
+  "$TMPD/bash-upgrade-output"
+
+zsh_preserve_home="$TMPD/zsh-preserve-home"
+zsh_preserve_target="$TMPD/zsh-preserve-target"
+mkdir -p "$zsh_preserve_home"
+env \
+  HOME="$zsh_preserve_home" FIXIT_HOME="$zsh_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
+    --model zsh-preserved-model --variant high --shell zsh > "$TMPD/zsh-seed-output"
+run_clean_upgrade "$zsh_preserve_home" "$zsh_preserve_target" /bin/zsh zsh "$TMPD/zsh-upgrade-output"
+assert_config_round_trip "$(command -v zsh)" "$zsh_preserve_home/.zshrc" codex \
+  zsh-preserved-model high ""
+
+multi_home="$TMPD/multi-rc-home"
+multi_target="$TMPD/multi-rc-target"
+mkdir -p "$multi_home"
+env \
+  HOME="$multi_home" FIXIT_HOME="$multi_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
+    --model bash-priority-model --key bash-priority-key --shell bash > "$TMPD/multi-bash-output"
+env \
+  HOME="$multi_home" FIXIT_HOME="$multi_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
+    --model zsh-secondary-model --variant medium --shell zsh > "$TMPD/multi-zsh-output"
+run_clean_upgrade "$multi_home" "$multi_target" /bin/bash both "$TMPD/multi-upgrade-output"
+assert_config_round_trip /bin/bash "$multi_home/.bashrc" openrouter bash-priority-model "" bash-priority-key
+assert_config_round_trip "$(command -v zsh)" "$multi_home/.zshrc" openrouter \
+  bash-priority-model "" bash-priority-key
+grep -q 'Selected rc files disagree on FX_PROVIDER' "$TMPD/multi-upgrade-output"
+
+tuple_home="$TMPD/tuple-home"
+tuple_target="$TMPD/tuple-target"
+mkdir -p "$tuple_home"
+env \
+  HOME="$tuple_home" FIXIT_HOME="$tuple_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
+    --shell bash > "$TMPD/tuple-bash-output"
+env \
+  HOME="$tuple_home" FIXIT_HOME="$tuple_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider opencode \
+    --model secondary-model --variant high --shell zsh > "$TMPD/tuple-zsh-output"
+run_clean_upgrade "$tuple_home" "$tuple_target" /bin/bash both "$TMPD/tuple-upgrade-output"
+assert_config_round_trip /bin/bash "$tuple_home/.bashrc" codex "" "" ""
+assert_config_round_trip "$(command -v zsh)" "$tuple_home/.zshrc" codex "" "" ""
+if grep -qF "Keeping existing FX_MODEL from $tuple_home/.zshrc" "$TMPD/tuple-upgrade-output" || \
+   grep -qF "Keeping existing FX_VARIANT from $tuple_home/.zshrc" "$TMPD/tuple-upgrade-output"; then
+  exit 1
+fi
+
+key_tuple_home="$TMPD/key-tuple-home"
+key_tuple_target="$TMPD/key-tuple-target"
+mkdir -p "$key_tuple_home"
+env \
+  HOME="$key_tuple_home" FIXIT_HOME="$key_tuple_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
+    --key primary-key --shell bash > "$TMPD/key-tuple-bash-output"
+awk '$0 !~ /^export OPENROUTER_API_KEY=/' "$key_tuple_home/.bashrc" \
+  > "$key_tuple_home/.bashrc.without-key"
+mv "$key_tuple_home/.bashrc.without-key" "$key_tuple_home/.bashrc"
+env \
+  HOME="$key_tuple_home" FIXIT_HOME="$key_tuple_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
+    --key secondary-key --shell zsh > "$TMPD/key-tuple-zsh-output"
+run_clean_upgrade "$key_tuple_home" "$key_tuple_target" /bin/bash both \
+  "$TMPD/key-tuple-upgrade-output"
+assert_config_round_trip /bin/bash "$key_tuple_home/.bashrc" none "" "" ""
+assert_config_round_trip "$(command -v zsh)" "$key_tuple_home/.zshrc" none "" "" ""
+if grep -qF "Keeping existing OPENROUTER_API_KEY from $key_tuple_home/.zshrc" \
+    "$TMPD/key-tuple-upgrade-output"; then
+  exit 1
+fi
+
+env \
+  FX_PROVIDER=codex FX_MODEL=environment-model FX_VARIANT=environment-variant \
+  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --model cli-model --variant cli-variant \
+    --shell bash > "$TMPD/precedence-output"
+assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" codex cli-model cli-variant ""
+
+env \
+  OPENROUTER_API_KEY=environment-key \
+  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
+    --model key-model --key cli-key --shell bash > "$TMPD/key-precedence-output"
+assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" openrouter key-model "" cli-key
+
+parse_home="$TMPD/safe-parse-home"
+parse_target="$TMPD/safe-parse-target"
+parse_marker="$TMPD/unsafe-parse-ran"
+parse_model="\$(touch '$parse_marker')"
+mkdir -p "$parse_home" "$parse_target"
+cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
+  "$ROOT/src/fixit-ai.py" "$parse_target/"
+printf 'dum-tum-install-v1\n' > "$parse_target/.dum-tum-install"
+printf '%s\n' \
+  '# >>> fixit.zsh >>>' \
+  "source '$parse_target/fixit.bash'" \
+  "export FX_PROVIDER=\"codex\"" \
+  "export FX_MODEL=\"$parse_model\"" \
+  "export FX_VARIANT=\"low\"" \
+  '# <<< fixit.zsh <<<' > "$parse_home/.bashrc"
+run_clean_upgrade "$parse_home" "$parse_target" /bin/bash bash "$TMPD/safe-parse-output"
+[[ ! -e "$parse_marker" ]]
+assert_config_round_trip /bin/bash "$parse_home/.bashrc" codex "$parse_model" low ""
+[[ ! -e "$parse_marker" ]]
+
+missing_bin="$TMPD/missing-zsh-bin"
+missing_home="$TMPD/missing-zsh-home"
+mkdir -p "$missing_bin" "$missing_home"
+for command_name in uname basename dirname awk python3 curl; do
+  ln -s "$(command -v "$command_name")" "$missing_bin/$command_name"
+done
+if env \
+  HOME="$missing_home" FIXIT_HOME="$TMPD/missing-zsh-target" \
+  PATH="$missing_bin" SHELL=/bin/zsh \
+  /bin/bash "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell zsh \
+    > "$TMPD/missing-zsh-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Shell targets: zsh' "$TMPD/missing-zsh-output"
+grep -q 'Missing required dependencies with --skip-deps: zsh' "$TMPD/missing-zsh-output"
+[[ ! -e "$TMPD/missing-zsh-target" && ! -e "$missing_home/.zshrc" && ! -e "$missing_home/.bashrc" ]]
+
+darwin_bin="$TMPD/darwin-bin"
+mkdir -p "$darwin_bin"
+printf '%s\n' '#!/bin/sh' 'printf "Darwin\\n"' > "$darwin_bin/uname"
+chmod +x "$darwin_bin/uname"
+darwin_path="$darwin_bin:/usr/bin:/bin"
+profile_home="$TMPD/profile-home"
+profile_target="$TMPD/profile-target"
+mkdir -p "$profile_home"
+printf 'DUM_TUM_LOAD_COUNT=$(( ${DUM_TUM_LOAD_COUNT:-0} + 1 ))\n' > "$profile_home/.bashrc"
+printf 'PROFILE_BEFORE=1\n' > "$profile_home/.bash_profile"
+env \
+  HOME="$profile_home" FIXIT_HOME="$profile_target" PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/profile-install-output"
+printf 'PROFILE_AFTER=1\n' >> "$profile_home/.bash_profile"
+/bin/bash -c '
+  source "$1"
+  source "$1"
+  [[ "$DUM_TUM_LOAD_COUNT" -eq 1 ]]
+  [[ "$FX_PROVIDER" == none ]]
+' dum-tum-test "$profile_home/.bash_profile"
+env \
+  HOME="$profile_home" FIXIT_HOME="$profile_target" PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/profile-reinstall-output"
+[[ "$(grep -cxF '# >>> dum-tum bashrc loader >>>' "$profile_home/.bash_profile")" -eq 1 ]]
+env \
+  HOME="$profile_home" FIXIT_HOME="$profile_target" PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/profile-uninstall-output"
+grep -qxF 'PROFILE_BEFORE=1' "$profile_home/.bash_profile"
+grep -qxF 'PROFILE_AFTER=1' "$profile_home/.bash_profile"
+if grep -qF 'dum-tum bashrc loader' "$profile_home/.bash_profile"; then
+  exit 1
+fi
+
+existing_profile_home="$TMPD/existing-profile-home"
+mkdir -p "$existing_profile_home"
+printf 'source "$HOME/.bashrc"\n' > "$existing_profile_home/.bash_profile"
+cp "$existing_profile_home/.bash_profile" "$existing_profile_home/profile-original"
+env \
+  HOME="$existing_profile_home" FIXIT_HOME="$TMPD/existing-profile-target" \
+  PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/existing-profile-output"
+cmp "$existing_profile_home/profile-original" "$existing_profile_home/.bash_profile"
+env \
+  HOME="$existing_profile_home" FIXIT_HOME="$TMPD/existing-profile-target" \
+  PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/existing-profile-uninstall-output"
+cmp "$existing_profile_home/profile-original" "$existing_profile_home/.bash_profile"
+
+other_profile_home="$TMPD/other-profile-home"
+mkdir -p "$other_profile_home"
+printf 'source "$HOME/.other.bashrc"\n' > "$other_profile_home/.bash_profile"
+env \
+  HOME="$other_profile_home" FIXIT_HOME="$TMPD/other-profile-target" \
+  PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/other-profile-output"
+grep -qxF 'source "$HOME/.other.bashrc"' "$other_profile_home/.bash_profile"
+[[ "$(grep -cxF '# >>> dum-tum bashrc loader >>>' "$other_profile_home/.bash_profile")" -eq 1 ]]
+
+same_profile_home="$TMPD/same-profile-home"
+mkdir -p "$same_profile_home"
+printf 'SAME_PROFILE_BEFORE=1\n' > "$same_profile_home/.bashrc"
+ln -s .bashrc "$same_profile_home/.bash_profile"
+env \
+  HOME="$same_profile_home" FIXIT_HOME="$TMPD/same-profile-target" \
+  PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/same-profile-output"
+[[ -L "$same_profile_home/.bash_profile" ]]
+grep -qxF 'SAME_PROFILE_BEFORE=1' "$same_profile_home/.bashrc"
+if grep -qF 'dum-tum bashrc loader' "$same_profile_home/.bashrc"; then
+  exit 1
+fi
+assert_config_round_trip /bin/bash "$same_profile_home/.bashrc" none "" "" ""
+
 printf 'Installer tests passed\n'
