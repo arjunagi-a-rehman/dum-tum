@@ -601,4 +601,131 @@ if grep -qF 'dum-tum bashrc loader' "$same_profile_home/.bashrc"; then
 fi
 assert_config_round_trip /bin/bash "$same_profile_home/.bashrc" none "" "" ""
 
+tx_root="$TMPD/transaction"
+tx_home="$tx_root/home"
+tx_parent="$tx_root/runtime-parent"
+tx_install="$tx_parent/fixit"
+tx_snapshot="$tx_root/snapshot"
+mkdir -p "$tx_home/config" "$tx_parent" "$tx_snapshot"
+printf 'zsh-before\n' > "$tx_home/config/zshrc"
+printf 'bash-before\n' > "$tx_home/.bashrc"
+printf 'profile-before\n' > "$tx_home/.bash_profile"
+chmod 640 "$tx_home/config/zshrc"
+chmod 644 "$tx_home/.bashrc"
+chmod 600 "$tx_home/.bash_profile"
+ln -s config/zshrc "$tx_home/.zshrc"
+env \
+  HOME="$tx_home" FIXIT_HOME="$tx_install" PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
+    --model transaction-old-model --variant low --shell both > "$tx_root/seed-output"
+cp -Rp "$tx_install" "$tx_snapshot/runtime"
+cp -p "$tx_home/config/zshrc" "$tx_snapshot/zshrc"
+cp -p "$tx_home/.bashrc" "$tx_snapshot/bashrc"
+cp -p "$tx_home/.bash_profile" "$tx_snapshot/bash-profile"
+tx_zsh_mode="$(file_mode "$tx_home/config/zshrc")"
+tx_bash_mode="$(file_mode "$tx_home/.bashrc")"
+tx_profile_mode="$(file_mode "$tx_home/.bash_profile")"
+
+assert_transaction_restored() {
+  local f debris
+  [[ -L "$tx_home/.zshrc" ]]
+  [[ "$(readlink "$tx_home/.zshrc")" == config/zshrc ]]
+  cmp "$tx_snapshot/zshrc" "$tx_home/config/zshrc"
+  cmp "$tx_snapshot/bashrc" "$tx_home/.bashrc"
+  cmp "$tx_snapshot/bash-profile" "$tx_home/.bash_profile"
+  [[ "$(file_mode "$tx_home/config/zshrc")" == "$tx_zsh_mode" ]]
+  [[ "$(file_mode "$tx_home/.bashrc")" == "$tx_bash_mode" ]]
+  [[ "$(file_mode "$tx_home/.bash_profile")" == "$tx_profile_mode" ]]
+  for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py .dum-tum-install; do
+    cmp "$tx_snapshot/runtime/$f" "$tx_install/$f"
+    [[ "$(file_mode "$tx_snapshot/runtime/$f")" == "$(file_mode "$tx_install/$f")" ]]
+  done
+  debris="$(find "$tx_parent" "$tx_home" \
+    \( -name '.dum-tum-install.*' -o -name '.dum-tum-backup.*' \
+       -o -name '.dum-tum-rc.*' -o -name '.dum-tum-block.*' \) \
+    -print -quit)"
+  if [[ -n "$debris" ]]; then
+    printf 'Transaction debris remains: %s\n' "$debris" >&2
+    exit 1
+  fi
+}
+
+interrupted_bin="$tx_root/interrupted-bin"
+mkdir -p "$interrupted_bin"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'out=""' \
+  'while [[ $# -gt 0 ]]; do' \
+  '  if [[ "$1" == -o ]]; then out="$2"; shift 2; else shift; fi' \
+  'done' \
+  'printf "partial runtime\n" > "$out"' \
+  'exit 130' > "$interrupted_bin/curl"
+chmod +x "$interrupted_bin/curl"
+if env \
+  HOME="$tx_home" FIXIT_HOME="$tx_install" FIXIT_RAW="file://$ROOT" \
+  PATH="$interrupted_bin:$darwin_path" SHELL=/bin/bash \
+  /bin/bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell both \
+    < "$ROOT/install.sh" > "$tx_root/interrupted-output" 2>&1; then
+  exit 1
+fi
+assert_transaction_restored
+grep -q 'restored the previous runtime and shell configuration' "$tx_root/interrupted-output"
+
+if env \
+  HOME="$tx_home" FIXIT_HOME="$tx_install" PATH="$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider invalid-provider \
+    --shell both > "$tx_root/invalid-provider-output" 2>&1; then
+  exit 1
+fi
+assert_transaction_restored
+grep -q 'Invalid --provider: invalid-provider' "$tx_root/invalid-provider-output"
+
+activation_bin="$tx_root/activation-bin"
+mkdir -p "$activation_bin"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'src="${1:-}"' \
+  'dest=""' \
+  'for arg in "$@"; do dest="$arg"; done' \
+  'if [[ "$src" == */.dum-tum-install.* && "$dest" == "$TX_TEST_INSTALL" && ! -e "$TX_TEST_FLAG" ]]; then' \
+  '  touch "$TX_TEST_FLAG"' \
+  '  exit 1' \
+  'fi' \
+  'exec /bin/mv "$@"' > "$activation_bin/mv"
+chmod +x "$activation_bin/mv"
+if env \
+  TX_TEST_INSTALL="$tx_install" TX_TEST_FLAG="$tx_root/activation-failed" \
+  HOME="$tx_home" FIXIT_HOME="$tx_install" PATH="$activation_bin:$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell both \
+    > "$tx_root/activation-output" 2>&1; then
+  exit 1
+fi
+assert_transaction_restored
+[[ -e "$tx_root/activation-failed" ]]
+
+rc_commit_bin="$tx_root/rc-commit-bin"
+tx_bash_target="$(cd -P "$tx_home" && pwd)/.bashrc"
+mkdir -p "$rc_commit_bin"
+printf '%s\n' \
+  '#!/usr/bin/env bash' \
+  'src="${1:-}"' \
+  'dest=""' \
+  'for arg in "$@"; do dest="$arg"; done' \
+  'if [[ "$src" == */.dum-tum-rc.* && "$dest" == "$TX_TEST_FAIL_TARGET" && ! -e "$TX_TEST_FLAG" ]]; then' \
+  '  touch "$TX_TEST_FLAG"' \
+  '  exit 1' \
+  'fi' \
+  'exec /bin/mv "$@"' > "$rc_commit_bin/mv"
+chmod +x "$rc_commit_bin/mv"
+if env \
+  TX_TEST_FAIL_TARGET="$tx_bash_target" TX_TEST_FLAG="$tx_root/rc-commit-failed" \
+  HOME="$tx_home" FIXIT_HOME="$tx_install" PATH="$rc_commit_bin:$darwin_path" SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
+    --model transaction-new-model --key transaction-new-key --shell both \
+    > "$tx_root/rc-commit-output" 2>&1; then
+  exit 1
+fi
+assert_transaction_restored
+[[ -e "$tx_root/rc-commit-failed" ]]
+
 printf 'Installer tests passed\n'
