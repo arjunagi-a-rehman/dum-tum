@@ -9,7 +9,9 @@
 #   ./install.sh --uninstall
 set -euo pipefail
 
-REPO_RAW="${FIXIT_RAW:-https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main}"
+DEFAULT_REPO_RAW="https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main"
+REPO_RAW="${FIXIT_RAW:-$DEFAULT_REPO_RAW}"
+REPO_COMMIT_API="https://api.github.com/repos/arjunagi-a-rehman/dum-tum/commits/main"
 FIXIT_HOME_WAS_SET="${FIXIT_HOME+x}"
 INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
@@ -486,6 +488,34 @@ remove_install_dir() {
   ok "Removed $target"
 }
 
+rewrite_managed_file() {
+  local source="$1" output="$2" replacement="${3:-}"
+  local begin="${4:-$MARKER_BEGIN}" end="${5:-$MARKER_END}"
+  python3 - "$source" "$output" "$begin" "$end" "$replacement" <<'PY'
+import pathlib
+import sys
+
+source, output, begin, end, replacement = sys.argv[1:]
+data = pathlib.Path(source).read_bytes()
+begin = begin.encode()
+end = end.encode()
+start = None
+finish = None
+offset = 0
+for line in data.splitlines(keepends=True):
+    body = line[:-1] if line.endswith(b"\n") else line
+    if body == begin:
+        start = offset
+    if body == end:
+        finish = offset + len(line)
+    offset += len(line)
+if start is None or finish is None or finish < start:
+    raise SystemExit(1)
+insert = pathlib.Path(replacement).read_bytes() if replacement else b""
+pathlib.Path(output).write_bytes(data[:start] + insert + data[finish:])
+PY
+}
+
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Darwin) OS_NAME="macOS" ;;
@@ -600,8 +630,23 @@ install_deps() {
   ok "Dependencies installed"
 }
 
+resolve_runtime_raw() {
+  RUNTIME_RAW="$REPO_RAW"
+  [[ -z "${FIXIT_RAW+x}" ]] || return 0
+  local response sha
+  if ! response="$(curl -fsSL "$REPO_COMMIT_API")"; then
+    err "Could not resolve the current dum-tum revision."
+    return 1
+  fi
+  if ! sha="$(printf '%s' "$response" | python3 -c 'import json, re, sys; value = json.load(sys.stdin).get("sha", ""); sys.stdout.write(value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) else "")')" || [[ -z "$sha" ]]; then
+    err "GitHub returned an invalid dum-tum revision."
+    return 1
+  fi
+  RUNTIME_RAW="https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/$sha"
+  ok "Pinned runtime source: $sha"
+}
+
 install_script() {
-  mkdir -p "$INSTALL_DIR"
   local f use_local=0 sentinel_tmp
   if [[ -n "$SELF_DIR" ]]; then
     use_local=1
@@ -610,14 +655,17 @@ install_script() {
     done
   fi
   if [[ "$use_local" -eq 1 ]]; then
+    mkdir -p "$INSTALL_DIR"
     info "Using local scripts from $SELF_DIR/src"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
       cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
     done
   else
+    resolve_runtime_raw
+    mkdir -p "$INSTALL_DIR"
     info "Downloading scripts from GitHub…"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      curl -fsSL "$REPO_RAW/src/$f" -o "$INSTALL_DIR/$f"
+      curl -fsSL "$RUNTIME_RAW/src/$f" -o "$INSTALL_DIR/$f"
     done
   fi
   chmod 644 "$INSTALL_DIR"/fixit-common.sh "$INSTALL_DIR"/fixit.zsh "$INSTALL_DIR"/fixit.bash "$INSTALL_DIR"/fixit-ai.py
@@ -1293,11 +1341,7 @@ write_plain_marked_block() {
     return 1
   }
   if [[ -f "$target" ]] && grep -qxF "$begin" "$target" 2>/dev/null; then
-    awk -v begin="$begin" -v end="$end" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end { skip=0; next }
-      !skip { print }
-    ' "$target" > "$tmp" || {
+    rewrite_managed_file "$target" "$tmp" "$repl_file" "$begin" "$end" || {
       rm -f "$tmp" "$repl_file"
       return 1
     }
@@ -1479,11 +1523,7 @@ EOF
 
   if [[ -f "$target" ]] && grep -qxF "$MARKER_BEGIN" "$target" 2>/dev/null; then
     info "Updating existing fixit block in $rc_file"
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$target" > "$tmp" || {
+    rewrite_managed_file "$target" "$tmp" "$repl_file" || {
       rm -f "$tmp" "$repl_file"
       return 1
     }
@@ -1624,11 +1664,7 @@ remove_marked_block() {
   dir="$(dirname "$target")"
   mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
   tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 2
-  awk -v begin="$begin" -v end="$end" '
-      $0 == begin { skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$target" > "$tmp" || {
+  rewrite_managed_file "$target" "$tmp" "" "$begin" "$end" || {
     rm -f "$tmp"
     return 2
   }
