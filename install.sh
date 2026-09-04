@@ -16,8 +16,16 @@ BASHRC="$HOME/.bashrc"
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
 
-SELF="${BASH_SOURCE[0]:-$0}"
-SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || true)"
+INSTALLER_SOURCE="${BASH_SOURCE[0]:-}"
+SELF_DIR=""
+case "$INSTALLER_SOURCE" in
+  ""|/dev/*|/proc/*) ;;
+  *)
+    if [[ -f "$INSTALLER_SOURCE" ]]; then
+      SELF_DIR="$(cd "$(dirname "$INSTALLER_SOURCE")" 2>/dev/null && pwd || true)"
+    fi
+    ;;
+esac
 
 # Values from CLI flags only (env is a non-interactive fallback — does not skip menus)
 API_KEY=""
@@ -254,11 +262,17 @@ install_deps() {
 
 install_script() {
   mkdir -p "$INSTALL_DIR"
-  local f
-  if [[ -n "$SELF_DIR" && -f "$SELF_DIR/src/fixit.zsh" && -f "$SELF_DIR/src/fixit-common.sh" ]]; then
+  local f use_local=0
+  if [[ -n "$SELF_DIR" ]]; then
+    use_local=1
+    for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
+      [[ -f "$SELF_DIR/src/$f" ]] || use_local=0
+    done
+  fi
+  if [[ "$use_local" -eq 1 ]]; then
     info "Using local scripts from $SELF_DIR/src"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      [[ -f "$SELF_DIR/src/$f" ]] && cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
+      cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
     done
   else
     info "Downloading scripts from GitHub…"
