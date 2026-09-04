@@ -249,6 +249,33 @@ preflight_rc_uninstall() {
   fi
 }
 
+rewrite_managed_file() {
+  local source="$1" output="$2" replacement="${3:-}"
+  python3 - "$source" "$output" "$MARKER_BEGIN" "$MARKER_END" "$replacement" <<'PY'
+import pathlib
+import sys
+
+source, output, begin, end, replacement = sys.argv[1:]
+data = pathlib.Path(source).read_bytes()
+begin = begin.encode()
+end = end.encode()
+start = None
+finish = None
+offset = 0
+for line in data.splitlines(keepends=True):
+    body = line[:-1] if line.endswith(b"\n") else line
+    if body == begin:
+        start = offset
+    if body == end:
+        finish = offset + len(line)
+    offset += len(line)
+if start is None or finish is None or finish < start:
+    raise SystemExit(1)
+insert = pathlib.Path(replacement).read_bytes() if replacement else b""
+pathlib.Path(output).write_bytes(data[:start] + insert + data[finish:])
+PY
+}
+
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Darwin) OS_NAME="macOS" ;;
@@ -1126,11 +1153,7 @@ EOF
 
   if [[ -f "$target" ]] && grep -qxF "$MARKER_BEGIN" "$target" 2>/dev/null; then
     info "Updating existing fixit block in $rc_file"
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$target" > "$tmp" || {
+    rewrite_managed_file "$target" "$tmp" "$repl_file" || {
       rm -f "$tmp" "$repl_file"
       return 1
     }
@@ -1270,11 +1293,7 @@ uninstall_rc() {
   dir="$(dirname "$target")"
   mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
   tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 2
-  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
-      $0 == begin { skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$target" > "$tmp" || {
+  rewrite_managed_file "$target" "$tmp" || {
     rm -f "$tmp"
     return 2
   }

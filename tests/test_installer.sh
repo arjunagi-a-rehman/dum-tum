@@ -163,13 +163,14 @@ printf '%s\n' \
   'before-config' \
   '# >>> fixit.zsh >>>' \
   'old-managed-content' \
-  '# <<< fixit.zsh <<<' \
-  'after-config' > "$update_home/.bashrc"
+  '# <<< fixit.zsh <<<' > "$update_home/.bashrc"
+printf 'after-config-no-newline' >> "$update_home/.bashrc"
 chmod 640 "$update_home/.bashrc"
 run_local_install "$update_home" "$TMPD/update-install" bash > "$TMPD/update-output"
 [[ "$(file_mode "$update_home/.bashrc")" == 640 ]]
 grep -qxF 'before-config' "$update_home/.bashrc"
-grep -qxF 'after-config' "$update_home/.bashrc"
+[[ "$(tail -c 23 "$update_home/.bashrc")" == 'after-config-no-newline' ]]
+[[ "$(tail -c 1 "$update_home/.bashrc" | od -An -tuC | tr -d ' ')" != 10 ]]
 if grep -qF 'old-managed-content' "$update_home/.bashrc"; then
   exit 1
 fi
@@ -224,6 +225,23 @@ fi
   [[ "$OPENAI_API_KEY" == outside-secret ]]
   [[ "$GOOGLE_API_KEY" == outside-google ]]
 ' dum-tum-test "$uninstall_home/.bashrc"
+
+byte_home="$TMPD/byte-uninstall-home"
+mkdir -p "$byte_home"
+printf '%s\n' \
+  'before-byte-block' \
+  '# >>> fixit.zsh >>>' \
+  'managed' \
+  '# <<< fixit.zsh <<<' > "$byte_home/.bashrc"
+printf 'after-byte-block-no-newline' >> "$byte_home/.bashrc"
+printf 'before-byte-block\nafter-byte-block-no-newline' > "$byte_home/expected"
+env \
+  HOME="$byte_home" \
+  FIXIT_HOME="$TMPD/byte-uninstall-target" \
+  PATH=/usr/bin:/bin \
+  SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/byte-uninstall-output"
+cmp "$byte_home/expected" "$byte_home/.bashrc"
 
 noop_home="$TMPD/noop-home"
 mkdir -p "$noop_home"
