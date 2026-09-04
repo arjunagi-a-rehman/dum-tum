@@ -80,9 +80,18 @@ else
   _fx_all_commands() { { compgen -c; compgen -A function; compgen -a; compgen -b; } 2>/dev/null | sort -u; }
 fi
 
-# Confirm/run a suggestion. Enter = run · e = edit then run · anything else = cancel
-_fx_confirm_run() {
-  local cmd="$1" key
+_fx_quote_argv() {
+  local out="" arg q
+  for arg in "$@"; do
+    printf -v q '%q' "$arg"
+    out="${out}${out:+ }${q}"
+  done
+  printf '%s' "$out"
+}
+
+_fx_confirm() {
+  local mode="$1" cmd="$2" key
+  shift 2
   [[ -z "$cmd" ]] && return 1
   printf '\033[36m→ %s\033[0m\n' "$cmd" >&2
   printf '\033[36m[Enter] run  [e] edit  [n] cancel\033[0m ' >&2
@@ -101,6 +110,8 @@ _fx_confirm_run() {
       elif [[ "${_FX_READLINE_CONFIRM:-0}" -eq 1 ]]; then
         _FX_READLINE_CMD="$cmd"
         _FX_READLINE_ACCEPT=1
+      elif [[ "$mode" == argv ]]; then
+        "$@"
       else
         eval "$cmd"
       fi
@@ -127,10 +138,24 @@ _fx_confirm_run() {
   esac
 }
 
+# Confirm/run a suggestion. Enter = run · e = edit then run · anything else = cancel
+_fx_confirm_run() {
+  _fx_confirm line "$1"
+}
+
+_fx_confirm_argv() {
+  (( $# > 0 )) || return 1
+  local cmd mode=argv
+  cmd="$(_fx_quote_argv "$@")"
+  alias "$1" >/dev/null 2>&1 && mode=line
+  _fx_confirm "$mode" "$cmd" "$@"
+}
+
 # Shared command-not-found logic. $1 = unknown command, rest = args.
 _fx_handle_not_found() {
   local cmd="$1"; shift
-  local full="$cmd${*:+ $*}"
+  local full
+  full="$(_fx_quote_argv "$cmd" "$@")"
   local out d best
 
   # Natural language ("list all files") → AI, don't fuzzy-match the first word
@@ -150,11 +175,11 @@ _fx_handle_not_found() {
       _fx_ai_resolve "$full"; return $?
     else
       printf '\033[33m? %s not found — closest: %s (not auto-running)\033[0m\n' "'$cmd'" "$best" >&2
-      _fx_confirm_run "$best${*:+ $*}" && return $?
+      _fx_confirm_argv "$best" "$@" && return $?
     fi
   elif (( $# == 0 )) && [[ -n "$best" && $d -le 2 ]]; then
     printf '\033[33m? %s not found — closest: %s\033[0m\n' "'$cmd'" "$best" >&2
-    _fx_confirm_run "$best" && return $?
+    _fx_confirm_argv "$best" && return $?
   else
     _fx_ai_resolve "$full"; return $?
   fi

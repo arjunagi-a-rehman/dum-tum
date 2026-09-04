@@ -76,6 +76,24 @@ check_rc "_fx_looks_like_nl path" 1 _fx_looks_like_nl list ./foo
 touch realfile
 check_rc "_fx_looks_like_nl existing file" 1 _fx_looks_like_nl show realfile
 
+quote_marker="$TMPD/quote-injected"
+out=$(_fx_quote_argv cmd "a b" "x;y" "\$(touch $quote_marker)" '*' '' "single'quote" 'double"quote' 'back\slash')
+eval "set -- $out"
+check_eq "_fx_quote_argv preserves argument count" 9 "$#"
+check_eq "_fx_quote_argv preserves spaces" "a b" "$2"
+check_eq "_fx_quote_argv preserves semicolons" "x;y" "$3"
+check_eq "_fx_quote_argv preserves substitutions as data" "\$(touch $quote_marker)" "$4"
+check_eq "_fx_quote_argv preserves globs" '*' "$5"
+check_eq "_fx_quote_argv preserves empty arguments" '' "$6"
+check_eq "_fx_quote_argv preserves single quotes" "single'quote" "$7"
+check_eq "_fx_quote_argv preserves double quotes" 'double"quote' "$8"
+check_eq "_fx_quote_argv preserves backslashes" 'back\slash' "$9"
+if [[ ! -e "$quote_marker" ]]; then
+  ok "_fx_quote_argv does not activate substitutions"
+else
+  bad "_fx_quote_argv does not activate substitutions"
+fi
+
 # ---------- _fx_has_secrets ----------
 check_rc "_fx_has_secrets --password" 0 _fx_has_secrets 'curl --password=hunter2 x'
 check_rc "_fx_has_secrets --token space" 0 _fx_has_secrets 'git clone --token abc123'
