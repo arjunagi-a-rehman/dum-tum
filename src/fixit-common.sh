@@ -161,13 +161,9 @@ _fx_handle_not_found() {
   return 127
 }
 
-# True when a line contains an obvious secret shape — those are never sent to AI.
-_fx_has_secrets() {
-  printf '%s' "$1" | grep -Eq \
-    -e '(--password|--passwd|--token)(=|[[:space:]])[^[:space:]]' \
-    -e 'Bearer[[:space:]]+[A-Za-z0-9._~+-]+' \
-    -e 'sk-[A-Za-z0-9_-]{8,}' \
-    -e '[A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*=[^[:space:]'"'"']'
+# True when stdin contains a known secret shape — those lines are never sent to AI.
+_fx_has_secrets() {  # stdin -> status
+  python3 "$_FX_AI_PY" secrets-detect
 }
 
 # Shared failed-command logic. $1 = exit code, rest = words of the failed line.
@@ -206,7 +202,7 @@ _fx_fix_failed_line() {
   _fx_ai_ready || return
   (( $# >= 2 )) || return
   _fx_in_list "$1" "${_FX_MULTICMD[@]}" || return
-  if _fx_has_secrets "$_FX_LASTFAIL"; then
+  if printf '%s' "$_FX_LASTFAIL" | _fx_has_secrets; then
     printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
     return
   fi
@@ -221,13 +217,8 @@ _fx_ai_sys_prompt() {
   printf '%s' "You translate user intent or broken shell commands into ONE correct shell command line for their machine. Reply with ONLY the command on the first line — no markdown fences, no backticks, no explanation, no thinking, do not run anything. Use the user's own aliases and project scripts (package.json scripts, make targets) when they fit. To start/run something, prefer the project's own script. On macOS, viewing/opening a file means the open command (e.g. open index.html for a browser, open -a Numbers file.xlsx); on Linux use xdg-open. If the action is destructive or irreversible, prefix with: # DANGER: "
 }
 
-# Mask common secret shapes before anything is sent to an AI provider.
 _fx_redact_secrets() {  # stdin -> stdout
-  sed -E \
-    -e 's/(--password|--passwd|--token)(=|[[:space:]]+)[^[:space:]]+/\1\2[REDACTED]/g' \
-    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+-]+/\1[REDACTED]/g' \
-    -e 's/sk-[A-Za-z0-9_-]{8,}/[REDACTED-KEY]/g' \
-    -e 's/([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*)=[^[:space:]'"'"']+/\1=[REDACTED]/g'
+  python3 "$_FX_AI_PY" secrets-redact
 }
 
 # Strip terminal control bytes (ANSI escapes, cursor moves) from untrusted text.
@@ -278,14 +269,27 @@ _fx_ai_extract() {  # $1=provider output kind; stdin -> one command on stdout
   python3 "$_FX_AI_PY" extract "$1"
 }
 
+_fx_curl_config_header() {
+  local value="$1"
+  case "$value" in
+    *$'\r'*|*$'\n'*) return 1 ;;
+  esac
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf 'header = "%s"\n' "$value"
+}
+
 
 _fx_ai_http() {  # $1=json body $2=url $3..=extra headers -> raw api response (overridable in tests)
   # Key (inside headers) and body go via stdin/tempfile, never argv (ps-visible to local users).
   local body="$1" url="$2" body_file rc h
   shift 2
+  for h in "$@"; do
+    _fx_curl_config_header "$h" >/dev/null || return 2
+  done
   body_file="$(mktemp "${TMPDIR:-/tmp}/fixit-body.XXXXXX")" || return 1
   printf '%s' "$body" > "$body_file"
-  for h in "$@"; do printf 'header = "%s"\n' "$h"; done | \
+  for h in "$@"; do _fx_curl_config_header "$h"; done | \
     curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
       -K - -H "Content-Type: application/json" --data-binary @"$body_file" \
       "$url"
@@ -491,7 +495,7 @@ _fx_ai_resolve() {   # called with the full original line
 # `fix` — send the last failed command for a corrected version
 fix() {
   [[ -z "$_FX_LASTFAIL" ]] && { echo "nothing failed recently"; return; }
-  if _fx_has_secrets "$_FX_LASTFAIL"; then
+  if printf '%s' "$_FX_LASTFAIL" | _fx_has_secrets; then
     printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
     return 1
   fi

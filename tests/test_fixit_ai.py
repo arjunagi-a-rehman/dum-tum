@@ -44,6 +44,90 @@ class TestHeadOf(unittest.TestCase):
         self.assertEqual(fixit_ai.head_of("sudo "), "sudo")
 
 
+class TestSecretRedaction(unittest.TestCase):
+    def test_positive_matrix(self):
+        cases = (
+            (
+                'export OPENAI_API_KEY = "alpha beta gamma"',
+                'export OPENAI_API_KEY = "[REDACTED]"',
+            ),
+            (
+                "MY_SECRET_TOKEN = 'one two three'",
+                "MY_SECRET_TOKEN = '[REDACTED]'",
+            ),
+            ("PASSWORD=hunter2", "PASSWORD=[REDACTED]"),
+            (
+                'deploy --api-key "flag value with spaces" --force',
+                'deploy --api-key "[REDACTED]" --force',
+            ),
+            (
+                "deploy --apikey = 'another flag value' --force",
+                "deploy --apikey = '[REDACTED]' --force",
+            ),
+            (
+                'curl -H "Authorization: Bearer abc.def.ghi" example.com',
+                'curl -H "Authorization: Bearer [REDACTED]" example.com',
+            ),
+            (
+                'curl -H "X-API-Key: header-secret" example.com',
+                'curl -H "X-API-Key: [REDACTED]" example.com',
+            ),
+            (
+                "postgresql://alice:s3cr3t@db.local/app",
+                "postgresql://alice:[REDACTED]@db.local/app",
+            ),
+            ('password: "open sesame"', 'password: "[REDACTED]"'),
+            ('"client_secret": "json value"', '"client_secret": "[REDACTED]"'),
+            (
+                "token=abc123&safe=true",
+                "token=[REDACTED]&safe=true",
+            ),
+            (
+                "key sk-abcdefghijklmnop here",
+                "key [REDACTED-KEY] here",
+            ),
+            (
+                "aws AKIAIOSFODNN7EXAMPLE here",
+                "aws [REDACTED-KEY] here",
+            ),
+            (
+                "github ghp_abcdefghijklmnopqrstuvwxyz here",
+                "github [REDACTED-KEY] here",
+            ),
+        )
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertTrue(fixit_ai.has_secrets(raw))
+                self.assertEqual(fixit_ai.redact_secrets(raw), expected)
+                self.assertFalse(fixit_ai.has_secrets(expected))
+
+    def test_negative_matrix(self):
+        cases = (
+            "git push origin main",
+            "curl --password",
+            "curl -H 'Authorization: Bearer' example.com",
+            "token_count=800",
+            "monkey=banana",
+            "passwordless=true",
+            "https://example.com/path",
+            "api key rotation policy",
+            "sk-short",
+            "AKIA is an AWS key prefix",
+        )
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.assertFalse(fixit_ai.has_secrets(raw))
+                self.assertEqual(fixit_ai.redact_secrets(raw), raw)
+
+    def test_multiple_values_are_fully_redacted(self):
+        raw = "API_KEY='first value' password: \"second value\" https://u:third@host/x"
+        expected = (
+            "API_KEY='[REDACTED]' password: \"[REDACTED]\" "
+            "https://u:[REDACTED]@host/x"
+        )
+        self.assertEqual(fixit_ai.redact_secrets(raw), expected)
+
+
 class TestExtract(unittest.TestCase):
     def test_simple_command(self):
         self.assertEqual(fixit_ai.extract("ls -la"), "ls -la")

@@ -3,6 +3,8 @@
 
 Usage:
     fixit-ai.py extract KIND    # stdin: provider output -> one command on stdout
+    fixit-ai.py secrets-detect  # stdin: text -> exit 0 when a known secret shape is found
+    fixit-ai.py secrets-redact  # stdin: text -> redacted text on stdout
     fixit-ai.py body-openrouter # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body
     fixit-ai.py body-openai     # env FX_SYS, FX_USER, FX_MODEL -> OpenAI JSON body
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
@@ -34,6 +36,78 @@ PROSE = re.compile(
     r"common |also |but |so |keep |reply |here |just |use )",
     re.I,
 )
+
+_SECRET_VALUE = (
+    r'(?s:"(?P<double>(?:\\.|[^"\\\r\n])*)"|'
+    r"'(?P<single>(?:\\.|[^'\\\r\n])*)'|"
+    r'(?P<bare>[^\s;&|"\']+))'
+)
+
+_SECRET_VALUE_PATTERNS = (
+    re.compile(
+        r'(?i)(?P<prefix>\b(?:'
+        r'(?:API_?KEY|ACCESS_?KEY(?:_ID)?|SECRET(?:_KEY)?|TOKEN|'
+        r'PASS(?:WORD|WD)?|CREDENTIALS?)|'
+        r'[A-Z_][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASS(?:WORD|WD)?|_CREDENTIALS?)'
+        r')\b\s*=\s*)' + _SECRET_VALUE
+    ),
+    re.compile(
+        r'(?i)(?P<prefix>--(?:api[-_]?key|apikey|access[-_]?key|client[-_]?secret|'
+        r'password|passwd|token|secret)(?:\s*=\s*|\s+))' + _SECRET_VALUE
+    ),
+    re.compile(
+        r'(?i)(?P<prefix>\b(?:'
+        r'(?:proxy-)?authorization\s*:\s*(?:(?:bearer|basic|token)\s+|'
+        r'(?!(?:bearer|basic|token)(?:\s|["\']|$)))|'
+        r'(?:x-)?api[-_]?key\s*:\s*|'
+        r'(?:x-)?(?:auth|access)[-_]?token\s*:\s*'
+        r'))' + _SECRET_VALUE
+    ),
+    re.compile(
+        r'(?i)(?<![A-Z0-9_])(?P<prefix>["\']?(?:'
+        r'api[-_ ]?key|apikey|access[-_ ]?key|client[-_ ]?secret|password|passwd|'
+        r'auth[-_ ]?token|token|secret|credentials?'
+        r')["\']?\s*[:=]\s*)' + _SECRET_VALUE
+    ),
+)
+
+_CREDENTIAL_URL = re.compile(
+    r'(?i)(?P<prefix>\b[a-z][a-z0-9+.-]*://[^/@\s:"\']+:)'
+    r'(?P<secret>[^/@\s"\']+)(?=@)'
+)
+
+_HIGH_CONFIDENCE_KEYS = re.compile(
+    r'(?<![A-Za-z0-9_-])(?:'
+    r'sk-[A-Za-z0-9_-]{8,}|'
+    r'(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}|'
+    r'github_pat_[A-Za-z0-9_]{20,}|'
+    r'gh[pousr]_[A-Za-z0-9]{20,}|'
+    r'AKIA[0-9A-Z]{16}|'
+    r'AIza[0-9A-Za-z_-]{30,}|'
+    r'xox[baprs]-[A-Za-z0-9-]{10,}|'
+    r'glpat-[A-Za-z0-9_-]{20,}'
+    r')(?![A-Za-z0-9_-])'
+)
+
+
+def _redact_secret_value(match: re.Match) -> str:
+    prefix = match.group("prefix")
+    if match.group("double") is not None:
+        return f'{prefix}"[REDACTED]"'
+    if match.group("single") is not None:
+        return f"{prefix}'[REDACTED]'"
+    return f"{prefix}[REDACTED]"
+
+
+def redact_secrets(text: str) -> str:
+    for pattern in _SECRET_VALUE_PATTERNS:
+        text = pattern.sub(_redact_secret_value, text)
+    text = _CREDENTIAL_URL.sub(r'\g<prefix>[REDACTED]', text)
+    return _HIGH_CONFIDENCE_KEYS.sub("[REDACTED-KEY]", text)
+
+
+def has_secrets(text: str) -> bool:
+    return redact_secrets(text) != text
 
 
 def head_of(s: str) -> str:
@@ -279,6 +353,14 @@ def cmd_extract(provider: str = "plain") -> None:
         print(out)
 
 
+def cmd_secrets_detect() -> None:
+    raise SystemExit(0 if has_secrets(sys.stdin.read()) else 1)
+
+
+def cmd_secrets_redact() -> None:
+    sys.stdout.write(redact_secrets(sys.stdin.read()))
+
+
 def _chat_body(token_field: str) -> dict:
     return {
         "model": os.environ["FX_MODEL"],
@@ -370,6 +452,10 @@ def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
     if mode == "proj":
         cmd_proj()
+    elif mode == "secrets-detect":
+        cmd_secrets_detect()
+    elif mode == "secrets-redact":
+        cmd_secrets_redact()
     elif mode in ("body", "body-openrouter"):
         cmd_body_openrouter()
     elif mode == "body-openai":

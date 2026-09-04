@@ -77,13 +77,12 @@ touch realfile
 check_rc "_fx_looks_like_nl existing file" 1 _fx_looks_like_nl show realfile
 
 # ---------- _fx_has_secrets ----------
-check_rc "_fx_has_secrets --password" 0 _fx_has_secrets 'curl --password=hunter2 x'
-check_rc "_fx_has_secrets --token space" 0 _fx_has_secrets 'git clone --token abc123'
-check_rc "_fx_has_secrets Bearer" 0 _fx_has_secrets 'curl -H "Authorization: Bearer abc.def.ghi"'
-check_rc "_fx_has_secrets sk- key" 0 _fx_has_secrets 'export OPENAI_API_KEY=sk-abcdefghijklmnop'
-check_rc "_fx_has_secrets KEY= env" 0 _fx_has_secrets 'OPENROUTER_API_KEY=zzz999'
-check_rc "_fx_has_secrets plain command" 1 _fx_has_secrets 'git psuh origin main'
-check_rc "_fx_has_secrets bare flag no value" 1 _fx_has_secrets 'curl --password'
+detect_secret() { printf '%s' "$1" | _fx_has_secrets; }
+check_rc "_fx_has_secrets --password" 0 detect_secret 'curl --password=hunter2 x'
+check_rc "_fx_has_secrets quoted API key" 0 detect_secret 'OPENAI_API_KEY = "alpha beta"'
+check_rc "_fx_has_secrets credential URL" 0 detect_secret 'postgres://user:secret@localhost/db'
+check_rc "_fx_has_secrets plain command" 1 detect_secret 'git psuh origin main'
+check_rc "_fx_has_secrets bare flag no value" 1 detect_secret 'curl --password'
 
 # ---------- _fx_redact_secrets ----------
 out=$(printf 'curl --password=hunter2 x\n' | _fx_redact_secrets)
@@ -109,6 +108,28 @@ check_eq "redact SECRET_TOKEN env" 'MY_SECRET_TOKEN=[REDACTED]' "$out"
 
 out=$(printf 'nothing secret here\n' | _fx_redact_secrets)
 check_eq "redact leaves plain text" 'nothing secret here' "$out"
+
+out=$(printf 'OPENAI_API_KEY = "alpha beta"\n' | _fx_redact_secrets)
+check_eq "redact quoted spaced assignment" 'OPENAI_API_KEY = "[REDACTED]"' "$out"
+
+out=$(_fx_curl_config_header $'Authorization: Bearer slash\\quote"tail')
+check_eq "curl config header escapes backslash and quote" \
+  'header = "Authorization: Bearer slash\\quote\"tail"' "$out"
+check_rc "curl config header rejects LF" 1 _fx_curl_config_header $'Authorization: Bearer safe\nurl = "https://attacker.invalid"'
+check_rc "curl config header rejects CR" 1 _fx_curl_config_header $'Authorization: Bearer safe\rurl = "https://attacker.invalid"'
+
+curl() {
+  printf 'called\n' >> "$TMPD/curl-called"
+}
+rm -f "$TMPD/curl-called"
+check_rc "AI HTTP rejects injected header" 2 _fx_ai_http '{}' 'https://provider.invalid' \
+  $'Authorization: Bearer safe\nurl = "https://attacker.invalid"'
+if [[ ! -e "$TMPD/curl-called" ]]; then
+  ok "AI HTTP does not invoke curl for injected header"
+else
+  bad "AI HTTP invoked curl for injected header"
+fi
+unset -f curl
 
 # ---------- _fx_strip_ctrl ----------
 out=$(printf '\033[31mred\033[0m plain\n' | _fx_strip_ctrl)
