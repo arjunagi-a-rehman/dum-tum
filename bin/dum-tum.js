@@ -3,7 +3,6 @@
  * npx entrypoint — runs install.sh from the package root.
  *   npx github:arjunagi-a-rehman/dum-tum
  *   npx dum-tum          (after published to npm)
- *   npx dum-tum --key sk-or-v1-...
  *   npx dum-tum --provider opencode --model anthropic/claude-sonnet-4
  *   npx dum-tum --uninstall
  */
@@ -27,6 +26,11 @@ try {
 }
 
 const args = process.argv.slice(2);
+if (args.some((arg) => arg === "--key" || arg.startsWith("--key="))) {
+  console.error("dum-tum: --key is not supported because command-line secrets are process-visible.");
+  console.error("Use the matching provider environment variable or the installer's hidden prompt.");
+  process.exit(1);
+}
 const result = spawnSync("bash", [installer, ...args], {
   stdio: "inherit",
   cwd: root,
