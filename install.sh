@@ -36,6 +36,7 @@ DO_UNINSTALL=0
 HAVE_OPENCODE=0
 HAVE_CLAUDE=0
 HAVE_CODEX=0
+HAVE_ANTIGRAVITY=0
 SHELL_CHOICE=""
 DO_ZSH=0
 DO_BASH=0
@@ -49,9 +50,9 @@ Usage:
   ./install.sh --uninstall
 
 Options:
-  --provider NAME   openrouter | openai | anthropic | gemini | opencode | claude | codex | none
+  --provider NAME   openrouter | openai | anthropic | gemini | opencode | claude | codex | antigravity | none
   --model ID        Model id for the chosen provider
-  --variant LEVEL   Reasoning effort (codex/opencode/claude: low|medium|high|...)
+  --variant LEVEL   Reasoning effort (CLI providers: low|medium|high|...)
   --key KEY         API key for key-based providers (openrouter/openai/anthropic/gemini)
   --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
@@ -273,6 +274,7 @@ detect_ai_clis() {
   HAVE_OPENCODE=0
   HAVE_CLAUDE=0
   HAVE_CODEX=0
+  HAVE_ANTIGRAVITY=0
   have opencode && HAVE_OPENCODE=1
   have claude && HAVE_CLAUDE=1
   have codex && HAVE_CODEX=1
@@ -285,6 +287,15 @@ detect_ai_clis() {
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     ok "Detected Codex CLI ($(command -v codex))"
   fi
+  if have agy && FX_PROVIDER=antigravity FX_AI_READY_TIMEOUT=10 bash -c '
+    source "$1"
+    _fx_ai_ready
+  ' bash "$INSTALL_DIR/fixit-common.sh"; then
+    HAVE_ANTIGRAVITY=1
+    ok "Detected Antigravity CLI ($(command -v agy))"
+  elif have agy; then
+    warn "Antigravity CLI found but not authenticated; run agy to sign in"
+  fi
 }
 
 normalize_provider() {
@@ -296,6 +307,7 @@ normalize_provider() {
     opencode|oc) echo opencode ;;
     claude|cc) echo claude ;;
     codex|cx) echo codex ;;
+    antigravity|agy|ag) echo antigravity ;;
     none|off|local|skip) echo none ;;
     "") echo "" ;;
     *) echo "" ;;
@@ -347,6 +359,8 @@ select_provider() {
       PROVIDER="claude"
     elif [[ "$HAVE_CODEX" -eq 1 ]]; then
       PROVIDER="codex"
+    elif [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
+      PROVIDER="antigravity"
     else
       PROVIDER="none"
       warn "No AI provider selected (non-interactive) — local typo fixes only."
@@ -383,6 +397,12 @@ select_provider() {
     [[ "$hint" == "codex" ]] && default=$i
     i=$((i+1))
   fi
+  if [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
+    printf "  [%d] Antigravity CLI (uses your local agy auth)\n" "$i"
+    labels+=("Antigravity CLI"); values+=("antigravity")
+    [[ "$hint" == "antigravity" ]] && default=$i
+    i=$((i+1))
+  fi
   printf "  [%d] OpenRouter API key\n" "$i"
   labels+=("OpenRouter"); values+=("openrouter")
   [[ "$hint" == "openrouter" ]] && default=$i
@@ -403,8 +423,8 @@ select_provider() {
   labels+=("Skip"); values+=("none")
   [[ "$hint" == "none" ]] && default=$i
 
-  if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CLAUDE" -eq 0 && "$HAVE_CODEX" -eq 0 ]]; then
-    echo "  (tip: install opencode, claude, or codex CLI, then re-run to use them)"
+  if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CLAUDE" -eq 0 && "$HAVE_CODEX" -eq 0 && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
+    echo "  (tip: install opencode, claude, codex, or Antigravity CLI, then re-run to use them)"
   fi
   [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
 
@@ -496,7 +516,7 @@ select_model() {
         openai)     MODEL="gpt-4o-mini" ;;
         anthropic)  MODEL="claude-sonnet-4-5" ;;
         gemini)     MODEL="gemini-2.5-flash" ;;
-        opencode|claude|codex) MODEL="" ;;
+        opencode|claude|codex|antigravity) MODEL="" ;;
       esac
     fi
     [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (provider default)"
@@ -644,6 +664,45 @@ except Exception:
       [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (Codex default)"
       return 0
       ;;
+    antigravity)
+      local listed
+      listed="$(agy models 2>/dev/null || true)"
+      if [[ -n "$listed" ]]; then
+        while IFS= read -r line; do
+          line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+          [[ -z "$line" ]] && continue
+          local tok
+          tok="$(echo "$line" | awk '{print $1}')"
+          [[ -n "$tok" ]] && models+=("$tok")
+        done <<<"$listed"
+      fi
+      printf "  [1] (Antigravity CLI default — recommended)\n"
+      i=2
+      for m in "${models[@]}"; do
+        printf "  [%d] %s\n" "$i" "$m"
+        [[ -n "$hint" && "$m" == "$hint" ]] && default=$i
+        i=$((i+1))
+      done
+      printf "  [%d] Custom model id…\n" "$i"
+      local max=$i
+      [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
+      printf "Select [1-%d] (default %d): " "$max" "$default"
+      read_tty choice
+      choice="${choice:-$default}"
+      if [[ "$choice" == "1" ]]; then
+        MODEL=""
+      elif [[ "$choice" == "$max" ]]; then
+        printf "Model id (see 'agy models') [%s]: " "${hint:-}"
+        read_tty custom
+        MODEL="${custom:-$hint}"
+      elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 2 && choice < max )); then
+        MODEL="${models[$((choice-2))]}"
+      else
+        MODEL=""
+      fi
+      [[ -n "$MODEL" ]] && ok "Model: $MODEL" || ok "Model: (Antigravity default)"
+      return 0
+      ;;
   esac
 
   for m in "${models[@]}"; do
@@ -669,9 +728,9 @@ except Exception:
   ok "Model: $MODEL"
 }
 
-# ---------- reasoning effort (codex/opencode/claude) ----------
+# ---------- reasoning effort (codex/opencode/claude/antigravity) ----------
 select_variant() {
-  [[ "$PROVIDER" == "codex" || "$PROVIDER" == "opencode" || "$PROVIDER" == "claude" ]] || { VARIANT=""; return 0; }
+  [[ "$PROVIDER" == "codex" || "$PROVIDER" == "opencode" || "$PROVIDER" == "claude" || "$PROVIDER" == "antigravity" ]] || { VARIANT=""; return 0; }
 
   if [[ "$VARIANT_FROM_CLI" -eq 1 ]]; then
     ok "Reasoning: ${VARIANT:-"(model default)"} (from --variant)"
@@ -714,8 +773,10 @@ if pick:
   elif [[ "$PROVIDER" == "claude" ]]; then
     # claude --effort levels
     levels=(low medium high xhigh max)
-  else
+  elif [[ "$PROVIDER" == "opencode" ]]; then
     # opencode --variant: provider-specific; low/medium/high are the common ones
+    levels=(low medium high)
+  else
     levels=(low medium high)
   fi
 
@@ -755,6 +816,10 @@ if pick:
 
 # ---------- smoke test ----------
 test_ai() {
+  if [[ "$PROVIDER" == "antigravity" && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
+    err "Antigravity CLI is unavailable or not authenticated; run agy to sign in"
+    return 1
+  fi
   [[ "$SKIP_AI_TEST" -eq 1 ]] && return 0
   [[ "$PROVIDER" == "none" ]] && return 0
 
@@ -776,7 +841,6 @@ test_ai() {
     warn "Skipping AI test (codex missing)"
     return 0
   fi
-
   info "Testing AI backend ($PROVIDER)…"
   local sug rc=0
   local test_shell="zsh" test_file="$INSTALL_DIR/fixit.zsh"
@@ -827,6 +891,10 @@ test_ai() {
 
   warn "AI test returned no command (auth/network/model?)."
   if ! is_interactive; then
+    if [[ "$PROVIDER" == "antigravity" ]]; then
+      err "Antigravity AI test failed; configuration was not written"
+      return 1
+    fi
     warn "Continuing anyway (non-interactive)."
     return 0
   fi
@@ -879,7 +947,7 @@ write_rc_block() {
     vesc="${vesc//\"/\\\"}"
     variant_line="export FX_VARIANT=\"$vesc\""
   else
-    variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode/claude)'
+    variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode/claude/antigravity)'
   fi
 
   local key_var key_placeholder=""
@@ -988,6 +1056,7 @@ print_next_steps() {
     opencode)   ai_hint="OpenCode${MODEL:+ ($MODEL)}" ;;
     claude)     ai_hint="Claude Code${MODEL:+ ($MODEL)}" ;;
     codex)      ai_hint="Codex${MODEL:+ ($MODEL)}" ;;
+    antigravity) ai_hint="Antigravity${MODEL:+ ($MODEL)}" ;;
     *)          ai_hint="off (local typos only)" ;;
   esac
 
@@ -1021,7 +1090,7 @@ Try:
 
 Change provider later:
 
-  export FX_PROVIDER="opencode"   # or claude | codex | openrouter | openai | anthropic | gemini | none
+  export FX_PROVIDER="opencode"   # or claude | codex | antigravity | openrouter | openai | anthropic | gemini | none
   export FX_MODEL="..."
   # key-based providers only:
   export OPENROUTER_API_KEY="sk-or-v1-..."   # or OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY

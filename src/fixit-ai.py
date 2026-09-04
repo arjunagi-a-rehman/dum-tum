@@ -6,6 +6,7 @@ Usage:
     fixit-ai.py body            # env FX_SYS, FX_USER, FX_MODEL -> OpenAI-compatible JSON body
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
     fixit-ai.py body-gemini     # env FX_SYS, FX_USER -> Gemini generateContent JSON body
+    fixit-ai.py body-antigravity # stdin prompt -> Antigravity stream-json user event
     fixit-ai.py proj            # print compact project hints for cwd (scripts, targets, markers)
 """
 
@@ -79,8 +80,8 @@ def collect_text(obj: Any, parts: list) -> None:
             v = part.get(k)
             if isinstance(v, str) and v.strip():
                 parts.append(v)
-    for k in ("text", "content", "message", "delta", "output", "reasoning", "result",
-              "candidates", "parts"):
+    for k in ("text", "content", "message", "delta", "output", "response", "reasoning",
+              "result", "candidates", "parts"):
         v = obj.get(k)
         if isinstance(v, str) and v.strip():
             parts.append(v)
@@ -184,6 +185,14 @@ def cmd_body_gemini() -> None:
     }))
 
 
+def cmd_body_antigravity() -> None:
+    """Print an Antigravity stream-json user event from stdin."""
+    print(json.dumps({
+        "event": "user",
+        "message": {"content": sys.stdin.read()},
+    }))
+
+
 PROJECT_MARKERS = (
     "docker-compose.yml", "docker-compose.yaml", "requirements.txt", "pyproject.toml",
     "go.mod", "Cargo.toml", "Gemfile", "manage.py", "composer.json",
@@ -234,6 +243,8 @@ def main() -> None:
         cmd_body_anthropic()
     elif mode == "body-gemini":
         cmd_body_gemini()
+    elif mode == "body-antigravity":
+        cmd_body_antigravity()
     else:
         cmd_extract()
 
