@@ -42,7 +42,7 @@ _fx_ok() { local _max="${3:-1}"; (( $1 <= _max && $1 * 2 < $2 + 2 )); }  # $1=di
 
 # Auto-run gate (allowlist): only these read-only commands run without a
 # confirm prompt. Anything else — destructive or not — asks first.
-_FX_AUTORUN_SAFE=(ls pwd echo which type date whoami cat head tail wc stat file less more man)
+_FX_AUTORUN_SAFE=(ls pwd echo which type whoami cat head tail wc stat)
 
 # Only read-only commands where re-running is guaranteed safe.
 _FX_SAFE=(cd cat ls less more head tail wc stat file vim nano vi bat open code)
@@ -61,6 +61,28 @@ _fx_in_list() {  # $1=needle, rest=list
     [[ "$x" == "$n" ]] && return 0
   done
   return 1
+}
+
+_fx_can_autorun() {
+  local cmd="$1" arg
+  shift
+  _fx_in_list "$cmd" "${_FX_AUTORUN_SAFE[@]}" || return 1
+  [[ -t 0 && -t 1 && -t 2 ]] || return 1
+  alias "$cmd" >/dev/null 2>&1 && return 1
+  typeset -f "$cmd" >/dev/null 2>&1 && return 1
+  case "$cmd" in
+    pwd)
+      for arg in "$@"; do
+        [[ "$arg" == -L || "$arg" == -P ]] || return 1
+      done
+      ;;
+    whoami)
+      for arg in "$@"; do
+        [[ "$arg" == --help || "$arg" == --version ]] || return 1
+      done
+      ;;
+  esac
+  return 0
 }
 
 # True when every arg looks like plain English (not a flag/path/existing file).
@@ -166,7 +188,7 @@ _fx_handle_not_found() {
   out=$(_fx_all_commands | _fx_best "$cmd")
   d=${out%%$'\t'*}; best=${out#*$'\t'}
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
-    if _fx_in_list "$best" "${_FX_AUTORUN_SAFE[@]}"; then
+    if _fx_can_autorun "$best" "$@"; then
       printf '\033[33m↻ %s → %s\033[0m\n' "$cmd" "$best" >&2
       if "$best" "$@"; then
         return 0
