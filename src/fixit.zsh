@@ -3,6 +3,7 @@
 
 # Locate and source the shared core (same directory as this file)
 _fx_dir="${0:A:h}"
+_FX_ZSH_ADAPTER="$_fx_dir/fixit.zsh"
 [[ -f "$_fx_dir/fixit-common.sh" ]] && source "$_fx_dir/fixit-common.sh"
 unset _fx_dir
 
@@ -40,7 +41,7 @@ _fx_accept_line() {
     _fx_ai_resolve "$full"
     if (( _FX_ZLE_ACCEPT )); then
       BUFFER="$_FX_ZLE_CMD"
-      zle .accept-line
+      zle "$_FX_ZSH_SAVED_WIDGET"
     else
       [[ -n "$_FX_ZLE_CMD" ]] && BUFFER="$_FX_ZLE_CMD"
       zle reset-prompt
@@ -48,7 +49,7 @@ _fx_accept_line() {
     fi
     return
   fi
-  zle .accept-line
+  zle "$_FX_ZSH_SAVED_WIDGET"
 }
 
 command_not_found_handler() {
@@ -64,8 +65,36 @@ _fx_precmd() {
   local line="$_FX_LAST"; _FX_LAST=""
   _fx_fix_failed_line "$rc" "$line"
 }
-autoload -Uz add-zsh-hook
-add-zsh-hook preexec _fx_preexec
-add-zsh-hook precmd  _fx_precmd
-# Catch English sentences before builtins (where/which/find/…) execute them
-zle -N accept-line _fx_accept_line
+
+dum_tum_unload() {
+  [[ "${_FX_ZSH_LOADED:-0}" == 1 ]] || return 0
+  autoload -Uz add-zsh-hook
+  add-zsh-hook -d preexec _fx_preexec 2>/dev/null
+  add-zsh-hook -d precmd _fx_precmd 2>/dev/null
+  if [[ "$(zle -l -L accept-line 2>/dev/null)" == 'zle -N accept-line _fx_accept_line' ]] && \
+     zle -l "$_FX_ZSH_SAVED_WIDGET" >/dev/null 2>&1; then
+    zle -A "$_FX_ZSH_SAVED_WIDGET" accept-line
+  fi
+  zle -D "$_FX_ZSH_SAVED_WIDGET" 2>/dev/null
+  unset _FX_ZSH_SAVED_WIDGET
+  _FX_ZSH_LOADED=0
+}
+
+dum_tum_reload() {
+  local adapter="$_FX_ZSH_ADAPTER"
+  dum_tum_unload
+  source "$adapter"
+}
+
+if [[ -o interactive && "${_FX_ZSH_LOADED:-0}" != 1 ]]; then
+  autoload -Uz add-zsh-hook
+  add-zsh-hook -d preexec _fx_preexec 2>/dev/null
+  add-zsh-hook -d precmd _fx_precmd 2>/dev/null
+  add-zsh-hook preexec _fx_preexec
+  add-zsh-hook precmd _fx_precmd
+  _FX_ZSH_WIDGET_COUNTER=$((${_FX_ZSH_WIDGET_COUNTER:-0} + 1))
+  _FX_ZSH_SAVED_WIDGET="_dum_tum_saved_accept_line_$$_$_FX_ZSH_WIDGET_COUNTER"
+  zle -A accept-line "$_FX_ZSH_SAVED_WIDGET"
+  zle -N accept-line _fx_accept_line
+  _FX_ZSH_LOADED=1
+fi

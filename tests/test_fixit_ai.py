@@ -77,6 +77,27 @@ class TestRepairFailedLine(unittest.TestCase):
         repaired = fixit_ai.repair_failed_line(raw, ["cat"], ["document file.txt"])
         self.assertEqual(repaired, ("edit", "dcoument file.txt", "document file.txt", raw))
 
+    def test_complex_repair_does_not_insert_untrusted_filename_syntax(self):
+        candidates = (
+            ("target", "tar;get"),
+            ("tar(x)get", "tar$(x)get"),
+            ("target", "tar`get"),
+            ("target", "tar get"),
+            ("target", "tar'get"),
+            ("target", 'tar"get'),
+            ("target", "tar*get"),
+            ("target", "tar?get"),
+            ("target", "tar[get"),
+        )
+        for operator in ("| wc -c", "> output"):
+            for typo, candidate in candidates:
+                raw = f"cat '{typo}' {operator}"
+                with self.subTest(operator=operator, candidate=candidate):
+                    self.assertEqual(
+                        fixit_ai.repair_failed_line(raw, ["cat"], [candidate]),
+                        ("edit", typo, candidate, raw),
+                    )
+
     def test_does_not_repair_inside_expansion(self):
         raw = 'cat "$DIR/dcoument.txt"'
         self.assertIsNone(fixit_ai.repair_failed_line(raw, ["cat"], ["document.txt"]))

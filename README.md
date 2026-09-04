@@ -86,10 +86,11 @@ sl
 list all files
 ```
 
-Running the installer again updates the scripts in `~/.local/share/fixit` and replaces the existing marked config block instead of adding a duplicate. Restart the active shell after an update so its in-memory functions are refreshed:
+Running the installer again updates the scripts in `~/.local/share/fixit` and replaces the existing marked config block instead of adding a duplicate. Reload the adapter in the active shell after an update, or temporarily remove its hooks and bindings without disturbing integrations that were already installed:
 
 ```bash
-exec zsh          # or: exec bash
+dum_tum_reload
+dum_tum_unload
 ```
 
 **Non-interactive:**
