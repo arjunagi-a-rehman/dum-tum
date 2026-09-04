@@ -9,7 +9,9 @@
 #   ./install.sh --uninstall
 set -euo pipefail
 
-REPO_RAW="${FIXIT_RAW:-https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main}"
+DEFAULT_REPO_RAW="https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main"
+REPO_RAW="${FIXIT_RAW:-$DEFAULT_REPO_RAW}"
+REPO_COMMIT_API="https://api.github.com/repos/arjunagi-a-rehman/dum-tum/commits/main"
 FIXIT_HOME_WAS_SET="${FIXIT_HOME+x}"
 INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
@@ -536,6 +538,34 @@ remove_install_dir() {
   ok "Removed $target"
 }
 
+rewrite_managed_file() {
+  local source="$1" output="$2" replacement="${3:-}"
+  local begin="${4:-$MARKER_BEGIN}" end="${5:-$MARKER_END}"
+  python3 - "$source" "$output" "$begin" "$end" "$replacement" <<'PY'
+import pathlib
+import sys
+
+source, output, begin, end, replacement = sys.argv[1:]
+data = pathlib.Path(source).read_bytes()
+begin = begin.encode()
+end = end.encode()
+start = None
+finish = None
+offset = 0
+for line in data.splitlines(keepends=True):
+    body = line[:-1] if line.endswith(b"\n") else line
+    if body == begin:
+        start = offset
+    if body == end:
+        finish = offset + len(line)
+    offset += len(line)
+if start is None or finish is None or finish < start:
+    raise SystemExit(1)
+insert = pathlib.Path(replacement).read_bytes() if replacement else b""
+pathlib.Path(output).write_bytes(data[:start] + insert + data[finish:])
+PY
+}
+
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Darwin) OS_NAME="macOS" ;;
@@ -781,6 +811,22 @@ begin_install_transaction() {
   trap 'exit 143' TERM
 }
 
+resolve_runtime_raw() {
+  RUNTIME_RAW="$REPO_RAW"
+  [[ -z "${FIXIT_RAW+x}" ]] || return 0
+  local response sha
+  if ! response="$(curl -fsSL "$REPO_COMMIT_API")"; then
+    err "Could not resolve the current dum-tum revision."
+    return 1
+  fi
+  if ! sha="$(printf '%s' "$response" | python3 -c 'import json, re, sys; value = json.load(sys.stdin).get("sha", ""); sys.stdout.write(value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) else "")')" || [[ -z "$sha" ]]; then
+    err "GitHub returned an invalid dum-tum revision."
+    return 1
+  fi
+  RUNTIME_RAW="https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/$sha"
+  ok "Pinned runtime source: $sha"
+}
+
 stage_runtime() {
   local parent f use_local=0
   parent="$(dirname "$INSTALL_DIR")"
@@ -798,9 +844,10 @@ stage_runtime() {
       cp "$SELF_DIR/src/$f" "$TX_STAGE/$f"
     done
   else
+    resolve_runtime_raw
     info "Downloading scripts from GitHub…"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      curl -fsSL "$REPO_RAW/src/$f" -o "$TX_STAGE/$f"
+      curl -fsSL "$RUNTIME_RAW/src/$f" -o "$TX_STAGE/$f"
     done
   fi
   chmod 644 "$TX_STAGE"/fixit-common.sh "$TX_STAGE"/fixit.zsh \
@@ -1517,11 +1564,7 @@ render_marked_block() {
   fi
   if [[ -f "$target" ]] && grep -qxF "$begin" "$target" 2>/dev/null; then
     info "Updating existing $label block in $rc_file"
-    awk -v begin="$begin" -v end="$end" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end { skip=0; next }
-      !skip { print }
-    ' "$target" > "$tmp" || {
+    rewrite_managed_file "$target" "$tmp" "$repl_file" "$begin" "$end" || {
       rm -f "$tmp" "$repl_file"
       return 1
     }
@@ -1878,11 +1921,7 @@ prepare_uninstall_removal() {
     fi
   done
   tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 2
-  awk -v begin="$begin" -v end="$end" '
-      $0 == begin { skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$source" > "$tmp" || {
+  rewrite_managed_file "$source" "$tmp" "" "$begin" "$end" || {
     rm -f "$tmp"
     return 2
   }
