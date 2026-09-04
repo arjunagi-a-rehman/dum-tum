@@ -200,6 +200,10 @@ require_single_line() {
 }
 
 validate_single_line_inputs() {
+  if [[ -z "$HOME" ]]; then
+    err "HOME must not be empty"
+    return 1
+  fi
   require_single_line HOME "$HOME" || return 1
   require_single_line FIXIT_HOME "$INSTALL_DIR" || return 1
   require_single_line ZSHRC "$ZSHRC" || return 1
@@ -454,6 +458,45 @@ target_contains_path() {
   [[ "$protected" == "$target" || "$protected" == "$target/"* ]]
 }
 
+canonical_candidate_path() {
+  local candidate="$1" existing component suffix="" combined rest normalized="/"
+  while [[ "$candidate" != / && "$candidate" == */ ]]; do
+    candidate="${candidate%/}"
+  done
+  existing="$candidate"
+  while [[ ! -e "$existing" && ! -L "$existing" ]]; do
+    component="${existing##*/}"
+    suffix="/$component$suffix"
+    existing="${existing%/*}"
+    [[ -n "$existing" ]] || existing=/
+  done
+  [[ -d "$existing" ]] || return 1
+  existing="$(cd -P "$existing" 2>/dev/null && pwd)" || return 1
+  combined="$existing$suffix"
+  rest="${combined#/}"
+  while [[ -n "$rest" ]]; do
+    case "$rest" in
+      */*) component="${rest%%/*}"; rest="${rest#*/}" ;;
+      *) component="$rest"; rest="" ;;
+    esac
+    case "$component" in
+      ""|.) ;;
+      ..)
+        normalized="${normalized%/*}"
+        [[ -n "$normalized" ]] || normalized=/
+        ;;
+      *)
+        if [[ "$normalized" == / ]]; then
+          normalized="/$component"
+        else
+          normalized="$normalized/$component"
+        fi
+        ;;
+    esac
+  done
+  printf '%s\n' "$normalized"
+}
+
 validate_uninstall_target() {
   local target home_path pwd_path protected
   UNINSTALL_TARGET=""
@@ -474,7 +517,7 @@ validate_uninstall_target() {
   fi
   target="$(cd -P "$INSTALL_DIR" 2>/dev/null && pwd)" || return 1
   case "$target" in
-    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/proc|/run|/sbin|/tmp|/usr|/var)
+    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/private/etc|/private/tmp|/private/var|/proc|/run|/sbin|/tmp|/usr|/usr/bin|/usr/lib|/usr/sbin|/var)
       err "Refusing to uninstall dangerous path: $target"
       return 1
       ;;
@@ -499,6 +542,7 @@ validate_uninstall_target() {
 }
 
 validate_install_target() {
+  local target home_path pwd_path protected
   [[ ! -L "$INSTALL_DIR" ]] || {
     err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
     return 1
@@ -507,6 +551,24 @@ validate_install_target() {
     err "Refusing to install into non-directory FIXIT_HOME: $INSTALL_DIR"
     return 1
   }
+  target="$(canonical_candidate_path "$INSTALL_DIR")" || {
+    err "Could not resolve installation target: $INSTALL_DIR"
+    return 1
+  }
+  case "$target" in
+    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/private/etc|/private/tmp|/private/var|/proc|/run|/sbin|/tmp|/usr|/usr/bin|/usr/lib|/usr/sbin|/var)
+      err "Refusing to install into dangerous path: $target"
+      return 1
+      ;;
+  esac
+  home_path="$(canonical_candidate_path "$HOME")" || return 1
+  pwd_path="$(pwd -P)"
+  for protected in "$home_path" "$pwd_path" ${SELF_DIR:+"$SELF_DIR"}; do
+    if target_contains_path "$target" "$protected"; then
+      err "Refusing to install into protected path: $target"
+      return 1
+    fi
+  done
   if [[ -d "$INSTALL_DIR" && -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
     if ! install_identity_valid "$INSTALL_DIR"; then
       err "Refusing to install into non-empty directory without a valid dum-tum identity: $INSTALL_DIR"

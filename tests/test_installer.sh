@@ -395,6 +395,70 @@ if [[ -n "$(find "$TMPD" -name '.dum-tum-uninstall.*' -print -quit)" ]]; then
   exit 1
 fi
 
+protected_home="$TMPD/protected-install-home"
+mkdir -p "$protected_home"
+if env \
+  HOME="$protected_home" FIXIT_HOME="$protected_home" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/protected-home-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Refusing to install into protected path' "$TMPD/protected-home-output"
+[[ -z "$(find "$protected_home" -mindepth 1 -print -quit)" ]]
+
+protected_work="$TMPD/protected-install-work"
+protected_work_home="$TMPD/protected-install-work-home"
+mkdir -p "$protected_work" "$protected_work_home"
+if (
+  cd "$protected_work"
+  env HOME="$protected_work_home" FIXIT_HOME="$protected_work" \
+    PATH=/usr/bin:/bin SHELL=/bin/bash \
+    "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash
+) > "$TMPD/protected-work-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Refusing to install into protected path' "$TMPD/protected-work-output"
+[[ -z "$(find "$protected_work" -mindepth 1 -print -quit)" ]]
+[[ -z "$(find "$protected_work_home" -mindepth 1 -print -quit)" ]]
+
+lexical_home="$TMPD/protected-lexical-home"
+mkdir -p "$lexical_home"
+if env \
+  HOME="$lexical_home" FIXIT_HOME="$lexical_home/missing/.." \
+  PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/protected-lexical-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Refusing to install into protected path' "$TMPD/protected-lexical-output"
+[[ ! -e "$lexical_home/missing" ]]
+
+empty_home_target="$TMPD/empty-home-safe-target"
+if env \
+  HOME= FIXIT_HOME="$empty_home_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/empty-home-install-output" 2>&1; then
+  exit 1
+fi
+grep -q 'HOME must not be empty' "$TMPD/empty-home-install-output"
+[[ ! -e "$empty_home_target" ]]
+
+if env \
+  HOME="$validation_home" FIXIT_HOME=/private/tmp PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/dangerous-install-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Refusing to install into dangerous path' "$TMPD/dangerous-install-output"
+
+if env \
+  HOME="$validation_home" FIXIT_HOME="$ROOT" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/source-install-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Refusing to install into protected path' "$TMPD/source-install-output"
+
 run_clean_upgrade() {
   local home="$1" install_dir="$2" login_shell="$3" shell_choice="$4" output="$5"
   env -u FX_PROVIDER -u FX_MODEL -u FX_VARIANT \
