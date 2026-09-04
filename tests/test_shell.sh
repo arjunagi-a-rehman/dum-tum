@@ -197,6 +197,35 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   check_rc "_fx_ai_ready claude on PATH" 0 _fx_ai_ready
 )
 (
+  FX_PROVIDER=antigravity
+  mkdir -p emptybin
+  PATH="$TMPD/emptybin:/usr/bin:/bin"
+  check_rc "_fx_ai_ready antigravity missing binary" 1 _fx_ai_ready
+)
+(
+  FX_PROVIDER=antigravity
+  mkdir -p bin
+  printf '#!/bin/sh\nexit 0\n' > bin/agy
+  chmod +x bin/agy
+  PATH="$TMPD/bin:$PATH"
+  check_rc "_fx_ai_ready antigravity on PATH" 0 _fx_ai_ready
+)
+(
+  printf '%s\n' '#!/usr/bin/env bash' \
+    '[[ "$1" == "-p" ]] || exit 1' \
+    '[[ "$2" == *"Task/failed input: list files"* ]] || exit 1' \
+    '[[ "$3" == "--output-format" && "$4" == "text" ]] || exit 1' \
+    '[[ "$5" == "--model" && "$6" == "test-model" ]] || exit 1' \
+    '[[ "$7" == "--effort" && "$8" == "high" ]] || exit 1' \
+    'printf "ls -la\\n"' > bin/agy
+  chmod +x bin/agy
+  PATH="$TMPD/bin:$PATH"
+  FX_MODEL=test-model
+  FX_VARIANT=high
+  out=$(_fx_ai_antigravity list files)
+  check_eq "_fx_ai_antigravity invocation" 'ls -la' "$out"
+)
+(
   FX_PROVIDER=off
   check_rc "_fx_ai_ready off alias" 1 _fx_ai_ready
 )
