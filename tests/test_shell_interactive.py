@@ -390,21 +390,34 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.shell.command(f"source '{adapter}'")
         self.shell.command(
             "FX_LATER_ACCEPT_COUNT=0; "
-            "_fx_test_later_accept() { (( FX_LATER_ACCEPT_COUNT += 1 )); zle .accept-line; }; "
+            "_fx_test_later_accept() { (( FX_LATER_ACCEPT_COUNT += 1 )); zle _fx_test_later_saved; }; "
             "_fx_test_later_precmd() { :; }; "
             "add-zsh-hook precmd _fx_test_later_precmd; "
+            "zle -A accept-line _fx_test_later_saved; "
             "zle -N accept-line _fx_test_later_accept"
         )
         self.shell.command("dum_tum_unload")
         output = self.shell.command(
             "printf 'ZSH_LATER=%s:%s\\n' "
             '"${precmd_functions[(I)_fx_test_later_precmd]}" "$FX_LATER_ACCEPT_COUNT"; '
-            "zle -l -L accept-line"
+            "zle -l -L accept-line; zle -l -L _fx_test_later_saved"
         )
         state = output.rsplit("ZSH_LATER=", 1)[1].splitlines()[0].split(":")
         self.assertNotEqual("0", state[0], output)
         self.assertGreater(int(state[1]), 0, output)
         self.assertIn("zle -N accept-line _fx_test_later_accept", output)
+        self.assertIn("zle -N _fx_test_later_saved _fx_test_accept", output)
+
+        self.shell.command("dum_tum_reload; dum_tum_reload")
+        output = self.shell.command("printf ZSH_DELEGATING_WRAPPER")
+        self.assertIn("ZSH_DELEGATING_WRAPPER", output)
+        output = self.shell.command(
+            "printf 'ZSH_DELEGATE_COUNTS=%s:%s\\n' "
+            '"$FX_LATER_ACCEPT_COUNT" "$FX_ACCEPT_COUNT"'
+        )
+        state = output.rsplit("ZSH_DELEGATE_COUNTS=", 1)[1].splitlines()[0].split(":")
+        self.assertGreater(int(state[0]), 0, output)
+        self.assertGreater(int(state[1]), 0, output)
 
     @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
     def test_bash_hooks_coexist_and_unload_restores_state(self):
@@ -414,8 +427,8 @@ class InteractiveAdapterTest(unittest.TestCase):
             self.skipTest("Bash 4+ is required for Readline binding coexistence")
         self.shell = ShellSession([bash, "--noprofile", "--norc", "-i"], self.tempdir.name)
         self.shell.command(
-            "FX_DEBUG_COUNT=0; FX_PROMPT_COUNT=0; FX_ENTER_COUNT=0; "
-            "_fx_test_prompt() { (( FX_PROMPT_COUNT += 1 )); }; "
+            "FX_DEBUG_COUNT=0; FX_PROMPT_COUNT=0; FX_PROMPT_STATUS=0; FX_ENTER_COUNT=0; "
+            "_fx_test_prompt() { FX_PROMPT_STATUS=$?; (( FX_PROMPT_COUNT += 1 )); }; "
             "_fx_test_enter() { (( FX_ENTER_COUNT += 1 )); }; "
             "trap ': \"$((FX_DEBUG_COUNT += 1))\"' DEBUG; "
             "FX_EXPECT_DEBUG=\"$(trap -p DEBUG)\"; "
@@ -442,6 +455,10 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertEqual("_fx_prompt_hook;_fx_test_prompt", state[3], output)
         self.assertIn("BASH_DEBUG_LIVE=0", output)
         self.assertIn("BASH_CAPTURE=macro", output)
+
+        self.shell.command("false")
+        output = self.shell.command("printf 'BASH_PRIOR_STATUS=%s\\n' \"$FX_PROMPT_STATUS\"")
+        self.assertIn("BASH_PRIOR_STATUS=1", output)
 
         self.shell.command("dum_tum_reload")
         output = self.shell.command("printf 'BASH_RELOAD=%s\\n' \"$PROMPT_COMMAND\"")
@@ -475,6 +492,26 @@ class InteractiveAdapterTest(unittest.TestCase):
         )
         self.assertIn("BASH_LATER=_fx_test_prompt;_fx_test_later_prompt", output)
         self.assertIn(r'"\C-m": "\C-j"', output)
+
+        self.shell.command(f"source '{adapter}'")
+        self.shell.command(
+            "_fx_test_prepend_prompt() { :; }; "
+            'PROMPT_COMMAND="_fx_test_prepend_prompt;$PROMPT_COMMAND"'
+        )
+        self.shell.command("dum_tum_unload")
+        output = self.shell.command("printf 'BASH_PREPEND_UNLOAD=%s\\n' \"$PROMPT_COMMAND\"")
+        self.assertIn(
+            "BASH_PREPEND_UNLOAD=_fx_test_prepend_prompt;_fx_test_prompt;_fx_test_later_prompt",
+            output,
+        )
+        self.shell.command("dum_tum_reload; dum_tum_reload")
+        output = self.shell.command("printf 'BASH_PREPEND_RELOAD=%s\\n' \"$PROMPT_COMMAND\"")
+        state = output.rsplit("BASH_PREPEND_RELOAD=", 1)[1].splitlines()[0]
+        self.assertEqual(
+            "_fx_prompt_hook;_fx_test_prepend_prompt;_fx_test_prompt;_fx_test_later_prompt",
+            state,
+            output,
+        )
 
     @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
     def test_bash_prompt_command_array_is_preserved(self):

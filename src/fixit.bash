@@ -93,10 +93,16 @@ _fx_bash_restore_prompt_command() {
       fi
     fi
   else
-    local current="${PROMPT_COMMAND-}" remaining_prompt=""
+    local current="${PROMPT_COMMAND-}" remaining_prompt="" before after
     case "$current" in
       _fx_prompt_hook) ;;
       _fx_prompt_hook\;*) remaining_prompt="${current#_fx_prompt_hook;}" ;;
+      *\;_fx_prompt_hook\;*)
+        before="${current%%;_fx_prompt_hook;*}"
+        after="${current#"$before;_fx_prompt_hook;"}"
+        remaining_prompt="$before;$after"
+        ;;
+      *\;_fx_prompt_hook) remaining_prompt="${current%;_fx_prompt_hook}" ;;
       *) return 0 ;;
     esac
     if [[ -n "$remaining_prompt" || "$_FX_BASH_PREV_PROMPT_SET" == 1 ]]; then
@@ -139,6 +145,7 @@ if [[ $- == *i* ]]; then
   _fx_prompt_hook() {
     local rc=$?
     _fx_precmd "$rc"
+    return "$rc"
   }
 
   if (( ${BASH_VERSINFO[0]} >= 4 )); then

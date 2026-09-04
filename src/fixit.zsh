@@ -71,9 +71,18 @@ dum_tum_unload() {
   autoload -Uz add-zsh-hook
   add-zsh-hook -d preexec _fx_preexec 2>/dev/null
   add-zsh-hook -d precmd _fx_precmd 2>/dev/null
-  if [[ "$(zle -l -L accept-line 2>/dev/null)" == 'zle -N accept-line _fx_accept_line' ]] && \
-     zle -l "$_FX_ZSH_SAVED_WIDGET" >/dev/null 2>&1; then
-    zle -A "$_FX_ZSH_SAVED_WIDGET" accept-line
+  local definition widget
+  local -a definitions words
+  if zle -l "$_FX_ZSH_SAVED_WIDGET" >/dev/null 2>&1; then
+    definitions=("${(@f)$(zle -l -L 2>/dev/null)}")
+    for definition in "${definitions[@]}"; do
+      words=(${(z)definition})
+      if (( ${#words[@]} >= 4 )) && [[ "${words[1]}" == zle && "${words[2]}" == -N && \
+          "${words[4]}" == _fx_accept_line ]]; then
+        widget="${words[3]}"
+        zle -A "$_FX_ZSH_SAVED_WIDGET" "$widget"
+      fi
+    done
   fi
   zle -D "$_FX_ZSH_SAVED_WIDGET" 2>/dev/null
   unset _FX_ZSH_SAVED_WIDGET
