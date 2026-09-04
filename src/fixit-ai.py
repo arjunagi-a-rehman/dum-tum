@@ -8,6 +8,7 @@ Usage:
     fixit-ai.py body-gemini     # env FX_SYS, FX_USER -> Gemini generateContent JSON body
     fixit-ai.py body-antigravity # stdin prompt -> Antigravity stream-json user event
     fixit-ai.py proj            # print compact project hints for cwd (scripts, targets, markers)
+    fixit-ai.py repair-line ... # stdin failed line -> span-preserving filename repair
 """
 
 import json
@@ -193,6 +194,251 @@ def cmd_body_antigravity() -> None:
     }))
 
 
+def _skip_balanced(line: str, index: int, opener: str, closer: str) -> int:
+    depth = 1
+    quote = ""
+    while index < len(line) and depth:
+        char = line[index]
+        if quote:
+            if char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in "'\"`":
+            quote = char
+        elif char == "\\":
+            index += 2
+            continue
+        elif char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+        index += 1
+    return index
+
+
+def _skip_dollar(line: str, index: int) -> int:
+    index += 1
+    if index >= len(line):
+        return index
+    if line[index] == "(":
+        return _skip_balanced(line, index + 1, "(", ")")
+    if line[index] == "{":
+        return _skip_balanced(line, index + 1, "{", "}")
+    if line[index].isalpha() or line[index] == "_":
+        index += 1
+        while index < len(line) and (line[index].isalnum() or line[index] == "_"):
+            index += 1
+        return index
+    return index + 1
+
+
+def shell_words(line: str) -> list:
+    words = []
+    index = 0
+    while index < len(line):
+        if line[index] == "\n":
+            words.append(("operator", index, index + 1, "\n", False))
+            index += 1
+            continue
+        if line[index].isspace():
+            index += 1
+            continue
+        if line[index] == "#":
+            break
+        if line[index] in "|&;<>()":
+            start = index
+            char = line[index]
+            index += 1
+            while index < len(line) and line[index] == char:
+                index += 1
+            words.append(("operator", start, index, line[start:index], False))
+            continue
+
+        start = index
+        value = []
+        literal = True
+        while index < len(line):
+            char = line[index]
+            if char == "\n" or char.isspace() or char in "|&;<>()":
+                break
+            if char == "'":
+                end = line.find("'", index + 1)
+                if end < 0:
+                    literal = False
+                    index = len(line)
+                    break
+                value.append(line[index + 1:end])
+                index = end + 1
+                continue
+            if char == '"':
+                index += 1
+                closed = False
+                while index < len(line):
+                    char = line[index]
+                    if char == '"':
+                        index += 1
+                        closed = True
+                        break
+                    if char == "$":
+                        literal = False
+                        index = _skip_dollar(line, index)
+                        continue
+                    if char == "`":
+                        literal = False
+                        end = index + 1
+                        while end < len(line):
+                            if line[end] == "\\":
+                                end += 2
+                            elif line[end] == "`":
+                                end += 1
+                                break
+                            else:
+                                end += 1
+                        index = end
+                        continue
+                    if char == "\\" and index + 1 < len(line):
+                        value.append(line[index + 1])
+                        index += 2
+                        continue
+                    value.append(char)
+                    index += 1
+                if not closed:
+                    literal = False
+                continue
+            if char == "$":
+                literal = False
+                index = _skip_dollar(line, index)
+                continue
+            if char == "`":
+                literal = False
+                end = index + 1
+                while end < len(line):
+                    if line[end] == "\\":
+                        end += 2
+                    elif line[end] == "`":
+                        end += 1
+                        break
+                    else:
+                        end += 1
+                index = end
+                continue
+            if char == "\\" and index + 1 < len(line):
+                value.append(line[index + 1])
+                index += 2
+                continue
+            if char in "*?[{}]":
+                literal = False
+            value.append(char)
+            index += 1
+        words.append(("word", start, index, "".join(value), literal))
+    return words
+
+
+def _distance(left: str, right: str) -> int:
+    if abs(len(left) - len(right)) > 2:
+        return 99
+    rows = [[0] * (len(right) + 1) for _ in range(len(left) + 1)]
+    for row in range(len(left) + 1):
+        rows[row][0] = row
+    for column in range(len(right) + 1):
+        rows[0][column] = column
+    for row in range(1, len(left) + 1):
+        for column in range(1, len(right) + 1):
+            cost = left[row - 1].lower() != right[column - 1].lower()
+            rows[row][column] = min(
+                rows[row - 1][column] + 1,
+                rows[row][column - 1] + 1,
+                rows[row - 1][column - 1] + cost,
+            )
+            if (row > 1 and column > 1
+                    and left[row - 1].lower() == right[column - 2].lower()
+                    and left[row - 2].lower() == right[column - 1].lower()):
+                rows[row][column] = min(rows[row][column], rows[row - 2][column - 2] + 1)
+    return rows[-1][-1]
+
+
+def _repair_candidates(cwd: str) -> list:
+    candidates = []
+    try:
+        first_level = list(os.scandir(cwd))
+    except OSError:
+        return candidates
+    for entry in first_level:
+        if entry.name.startswith(".git"):
+            continue
+        candidates.append(entry.name)
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        try:
+            candidates.extend(f"{entry.name}/{child.name}" for child in os.scandir(entry.path)
+                              if not child.name.startswith(".git"))
+        except OSError:
+            pass
+    return candidates
+
+
+def repair_failed_line(line: str, safe_heads: list, candidates=None, cwd: str = "."):
+    tokens = shell_words(line)
+    head = ""
+    has_assignments = False
+    arguments = []
+    for token in tokens:
+        kind, _, _, value, literal = token
+        if kind == "operator":
+            if value[0] in "|&;()" or value == "\n":
+                break
+            continue
+        if not head:
+            if not literal:
+                return None
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", value):
+                has_assignments = True
+                continue
+            head = value
+            continue
+        arguments.append(token)
+    if head not in safe_heads:
+        return None
+
+    choices = _repair_candidates(cwd) if candidates is None else candidates
+    for _, start, end, value, literal in arguments:
+        if not literal or not value or value.startswith("-") or "\t" in value or "\n" in value:
+            continue
+        if os.path.exists(os.path.join(cwd, value)):
+            continue
+        best = ""
+        best_distance = 99
+        for candidate in choices:
+            if "\t" in candidate or "\n" in candidate:
+                continue
+            distance = _distance(value, candidate)
+            if distance < best_distance or (
+                    distance == best_distance and best and len(candidate) < len(best)):
+                best = candidate
+                best_distance = distance
+        if not best or best_distance > 2 or best_distance * 2 >= len(value) + 2:
+            continue
+        raw_word = line[start:end]
+        if raw_word.count(value) != 1:
+            return "edit", value, best, line
+        replacement = raw_word.replace(value, best, 1)
+        repaired = line[:start] + replacement + line[end:]
+        if not has_assignments and not re.search(r'''['"\\|&;<>()$`*?\[\]{}#!~\n]''', line):
+            return "argv", value, best, repaired
+        return "run", value, best, repaired
+    return None
+
+
+def cmd_repair_line() -> None:
+    repaired = repair_failed_line(sys.stdin.read(), sys.argv[2:])
+    if repaired:
+        print("\t".join(repaired))
+
+
 PROJECT_MARKERS = (
     "docker-compose.yml", "docker-compose.yaml", "requirements.txt", "pyproject.toml",
     "go.mod", "Cargo.toml", "Gemfile", "manage.py", "composer.json",
@@ -245,6 +491,8 @@ def main() -> None:
         cmd_body_gemini()
     elif mode == "body-antigravity":
         cmd_body_antigravity()
+    elif mode == "repair-line":
+        cmd_repair_line()
     else:
         cmd_extract()
 
