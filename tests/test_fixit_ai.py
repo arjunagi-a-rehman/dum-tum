@@ -168,8 +168,13 @@ class TestParsePayload(unittest.TestCase):
         self.assertEqual(fixit_ai.parse_payload(body, "chat"), "git status")
 
     def test_error_payload_reports_and_returns_empty(self):
+        import io
+        from contextlib import redirect_stderr
         body = json.dumps({"error": {"message": "invalid api key"}})
-        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
+        self.assertIn("AI error: invalid api key", stderr.getvalue())
 
     def test_opencode_stream_fragments_preserve_token_order(self):
         lines = "\n".join([
@@ -307,22 +312,38 @@ class TestParsePayload(unittest.TestCase):
 
 
 class TestBodyCommand(unittest.TestCase):
-    def test_body_json_structure(self):
+    def _body(self, command, model):
+        import io
+        from contextlib import redirect_stdout
         os.environ.update({
-            "FX_MODEL": "test/model",
+            "FX_MODEL": model,
             "FX_SYS": "sys prompt",
             "FX_USER": "user prompt",
         })
-        import io
-        from contextlib import redirect_stdout
         buf = io.StringIO()
         with redirect_stdout(buf):
-            fixit_ai.cmd_body()
-        body = json.loads(buf.getvalue())
-        self.assertEqual(body["model"], "test/model")
-        self.assertEqual(body["max_tokens"], 800)
+            command()
+        return json.loads(buf.getvalue())
+
+    def _assert_messages(self, body):
         self.assertEqual(body["messages"][0], {"role": "system", "content": "sys prompt"})
         self.assertEqual(body["messages"][1], {"role": "user", "content": "user prompt"})
+
+    def test_openrouter_body_uses_compatible_token_parameter(self):
+        body = self._body(fixit_ai.cmd_body_openrouter, "test/model")
+        self.assertEqual(body["model"], "test/model")
+        self.assertEqual(body["max_tokens"], 800)
+        self.assertNotIn("max_completion_tokens", body)
+        self._assert_messages(body)
+
+    def test_openai_bodies_use_supported_token_parameter(self):
+        for model in ("gpt-4o-mini", "gpt-4o", "gpt-5-mini"):
+            with self.subTest(model=model):
+                body = self._body(fixit_ai.cmd_body_openai, model)
+                self.assertEqual(body["model"], model)
+                self.assertEqual(body["max_completion_tokens"], 800)
+                self.assertNotIn("max_tokens", body)
+                self._assert_messages(body)
 
     def test_body_anthropic_structure(self):
         os.environ.update({
@@ -461,19 +482,29 @@ class TestMain(unittest.TestCase):
             sys.argv, sys.stdin = old_argv, old_stdin
         self.assertEqual(buf.getvalue(), "pwd\n")
 
-    def test_main_body_mode(self):
+    def _main_body(self, mode):
         import io
         from contextlib import redirect_stdout
         os.environ.update({"FX_MODEL": "m", "FX_SYS": "s", "FX_USER": "u"})
         old_argv = sys.argv
-        sys.argv = ["fixit-ai.py", "body"]
+        sys.argv = ["fixit-ai.py", mode]
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
                 fixit_ai.main()
         finally:
             sys.argv = old_argv
-        self.assertEqual(json.loads(buf.getvalue())["model"], "m")
+        return json.loads(buf.getvalue())
+
+    def test_main_openai_body_mode(self):
+        body = self._main_body("body-openai")
+        self.assertEqual(body["model"], "m")
+        self.assertEqual(body["max_completion_tokens"], 800)
+
+    def test_main_legacy_body_alias_keeps_openrouter_compatibility(self):
+        body = self._main_body("body")
+        self.assertEqual(body["model"], "m")
+        self.assertEqual(body["max_tokens"], 800)
 
 
 if __name__ == "__main__":
