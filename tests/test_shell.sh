@@ -218,6 +218,42 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   PATH="$TMPD/bin:$PATH"
   check_rc "_fx_ai_ready antigravity unauthenticated" 1 _fx_ai_ready
 )
+(
+  FX_PROVIDER=antigravity
+  mkdir -p bin
+  rm -f "$TMPD/agy-ready-marker"
+  printf '%s\n' '#!/bin/sh' \
+    'if [ ! -e "$FX_TEST_READY_MARKER" ]; then' \
+    '  touch "$FX_TEST_READY_MARKER"' \
+    '  exit 1' \
+    'fi' \
+    'exit 0' > bin/agy
+  chmod +x bin/agy
+  PATH="$TMPD/bin:$PATH"
+  export FX_TEST_READY_MARKER="$TMPD/agy-ready-marker"
+  unset _FX_ANTIGRAVITY_READY
+  check_rc "_fx_ai_ready antigravity initial auth failure" 1 _fx_ai_ready
+  check_rc "_fx_ai_ready antigravity retries after auth failure" 0 _fx_ai_ready
+)
+(
+  FX_PROVIDER=antigravity
+  mkdir -p bin
+  printf '#!/bin/sh\nexit 1\n' > bin/agy
+  chmod +x bin/agy
+  PATH="$TMPD/bin:$PATH"
+  unset _FX_ANTIGRAVITY_READY
+  out="$(_fx_ai_resolve test 2>&1 | _fx_strip_ctrl)"
+  check_eq "_fx_ai_resolve antigravity auth error" \
+    '? agy authentication check failed; run agy to sign in and retry' "$out"
+)
+(
+  FX_PROVIDER=antigravity
+  mkdir -p emptybin
+  PATH="$TMPD/emptybin:/usr/bin:/bin"
+  unset _FX_ANTIGRAVITY_READY
+  out="$(_fx_ai_resolve test 2>&1 | _fx_strip_ctrl)"
+  check_eq "_fx_ai_resolve antigravity missing binary error" '? agy not found on PATH' "$out"
+)
 out=$(
   printf '%s\n' '#!/usr/bin/env bash' \
     '[[ "$PWD" != "$FX_TEST_ORIGINAL_CWD" ]] || exit 1' \

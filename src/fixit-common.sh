@@ -251,15 +251,11 @@ _fx_shell_name() {
 
 _fx_antigravity_ready() {
   command -v agy >/dev/null 2>&1 || return 1
-  case "${_FX_ANTIGRAVITY_READY:-}" in
-    1) return 0 ;;
-    0) return 1 ;;
-  esac
+  [[ "${_FX_ANTIGRAVITY_READY:-}" == "1" ]] && return 0
   if _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy -p /usage --output-format text >/dev/null; then
     _FX_ANTIGRAVITY_READY=1
     return 0
   fi
-  _FX_ANTIGRAVITY_READY=0
   return 1
 }
 
@@ -469,7 +465,11 @@ _fx_ai_resolve() {   # called with the full original line
         printf '\033[31m? codex not found on PATH\033[0m\n' >&2
         ;;
       antigravity)
-        printf '\033[31m? agy not found on PATH\033[0m\n' >&2
+        if command -v agy >/dev/null 2>&1; then
+          printf '\033[31m? agy authentication check failed; run agy to sign in and retry\033[0m\n' >&2
+        else
+          printf '\033[31m? agy not found on PATH\033[0m\n' >&2
+        fi
         ;;
       *)
         printf '\033[31m? AI not configured (FX_PROVIDER=none)\033[0m\n' >&2
