@@ -459,6 +459,22 @@ if env \
 fi
 grep -q 'Refusing to install into protected path' "$TMPD/source-install-output"
 
+source_alias_real="$TMPD/source-alias-real"
+source_alias_link="$TMPD/source-alias-link"
+mkdir -p "$source_alias_real/src"
+cp "$ROOT/install.sh" "$source_alias_real/install.sh"
+cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
+  "$ROOT/src/fixit-ai.py" "$source_alias_real/src/"
+ln -s "$source_alias_real" "$source_alias_link"
+if env \
+  HOME="$validation_home" FIXIT_HOME="$source_alias_real" \
+  PATH=/usr/bin:/bin SHELL=/bin/bash \
+  "$source_alias_link/install.sh" --yes --skip-deps --skip-ai-test \
+    --provider none --shell bash > "$TMPD/source-alias-output" 2>&1; then
+  exit 1
+fi
+grep -q 'Refusing to install into protected path' "$TMPD/source-alias-output"
+
 run_clean_upgrade() {
   local home="$1" install_dir="$2" login_shell="$3" shell_choice="$4" output="$5"
   env -u FX_PROVIDER -u FX_MODEL -u FX_VARIANT \

@@ -498,7 +498,7 @@ canonical_candidate_path() {
 }
 
 validate_uninstall_target() {
-  local target home_path pwd_path protected
+  local target home_path pwd_path self_path="" protected
   UNINSTALL_TARGET=""
   if [[ "$FIXIT_HOME_WAS_SET" == x && -z "${FIXIT_HOME:-}" ]]; then
     err "Refusing to uninstall with an empty FIXIT_HOME"
@@ -524,7 +524,8 @@ validate_uninstall_target() {
   esac
   home_path="$(cd -P "$HOME" 2>/dev/null && pwd)" || return 1
   pwd_path="$(pwd -P)"
-  for protected in "$home_path" "$pwd_path" ${SELF_DIR:+"$SELF_DIR"}; do
+  [[ -z "$SELF_DIR" ]] || self_path="$(canonical_candidate_path "$SELF_DIR")" || return 1
+  for protected in "$home_path" "$pwd_path" ${self_path:+"$self_path"}; do
     if target_contains_path "$target" "$protected"; then
       err "Refusing to uninstall protected path: $target"
       return 1
@@ -542,7 +543,7 @@ validate_uninstall_target() {
 }
 
 validate_install_target() {
-  local target home_path pwd_path protected
+  local target home_path pwd_path self_path="" protected
   [[ ! -L "$INSTALL_DIR" ]] || {
     err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
     return 1
@@ -563,7 +564,8 @@ validate_install_target() {
   esac
   home_path="$(canonical_candidate_path "$HOME")" || return 1
   pwd_path="$(pwd -P)"
-  for protected in "$home_path" "$pwd_path" ${SELF_DIR:+"$SELF_DIR"}; do
+  [[ -z "$SELF_DIR" ]] || self_path="$(canonical_candidate_path "$SELF_DIR")" || return 1
+  for protected in "$home_path" "$pwd_path" ${self_path:+"$self_path"}; do
     if target_contains_path "$target" "$protected"; then
       err "Refusing to install into protected path: $target"
       return 1
