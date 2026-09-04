@@ -490,7 +490,7 @@ _fx_ai_resolve() {   # called with the full original line
 
 # `fix` — send the last failed command for a corrected version
 fix() {
-  [[ -z "$_FX_LASTFAIL" ]] && { echo "nothing failed recently"; return; }
+  [[ -z "${_FX_LASTFAIL:-}" ]] && { echo "nothing failed recently"; return; }
   if _fx_has_secrets "$_FX_LASTFAIL"; then
     printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
     return 1

@@ -325,6 +325,37 @@ case "$out" in
   *) bad "sys prompt mentions DANGER prefix" ;;
 esac
 
+# ---------- nounset-safe adapter state ----------
+out="$(bash -uc 'source "$1"; fix' bash "$ROOT/src/fixit.bash")"
+check_eq "bash nounset fix before failure" "nothing failed recently" "$out"
+
+out="$(bash -uc '
+  source "$1"
+  FX_AI_ON_FAIL=0
+  _fx_ai_resolve() { printf "resolved: %s\n" "$*"; }
+  _fx_preexec false
+  false
+  _fx_precmd
+  fix
+' bash "$ROOT/src/fixit.bash")"
+check_eq "bash nounset fix after failure" \
+  "resolved: fix this failed command: false (exit 1)" "$out"
+
+out="$(ZDOTDIR="$TMPD" zsh -fuc 'source "$1"; fix' zsh "$ROOT/src/fixit.zsh" 2>/dev/null)"
+check_eq "zsh nounset fix before failure" "nothing failed recently" "$out"
+
+out="$(ZDOTDIR="$TMPD" zsh -fuc '
+  source "$1"
+  FX_AI_ON_FAIL=0
+  _fx_ai_resolve() { printf "resolved: %s\n" "$*"; }
+  _fx_preexec false
+  false
+  _fx_precmd
+  fix
+' zsh "$ROOT/src/fixit.zsh" 2>/dev/null)"
+check_eq "zsh nounset fix after failure" \
+  "resolved: fix this failed command: false (exit 1)" "$out"
+
 PASS="$(grep -c '^pass$' "$RESULTS" || true)"
 FAIL="$(grep -c '^fail$' "$RESULTS" || true)"
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
