@@ -126,7 +126,7 @@ This tool runs things in your shell. That deserves a straight answer about what 
 - **Local mode is fully offline.** Nothing leaves your machine, period.
 - **Keys don't hit the process table.** API keys and request bodies go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
 
-One honest caveat: with the `opencode`/`codex`/`antigravity` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. (The `claude` provider sends the prompt via stdin, so it is not `ps`-visible.)
+One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. The `claude` and `antigravity` providers send the prompt via stdin, so it is not `ps`-visible. Antigravity runs in an isolated temporary workspace so it cannot change project files before dum-tum shows the confirmation prompt.
 
 What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detected package scripts or Make targets, up to 30 aliases, and the task or failed input. Known secret patterns are redacted, but filenames and command arguments can still be sensitive. Don't put secrets in natural-language prompts, filenames, aliases, or failed commands.
 

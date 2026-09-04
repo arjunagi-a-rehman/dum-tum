@@ -278,7 +278,6 @@ detect_ai_clis() {
   have opencode && HAVE_OPENCODE=1
   have claude && HAVE_CLAUDE=1
   have codex && HAVE_CODEX=1
-  have agy && HAVE_ANTIGRAVITY=1
   if [[ "$HAVE_OPENCODE" -eq 1 ]]; then
     ok "Detected OpenCode CLI ($(command -v opencode))"
   fi
@@ -288,8 +287,14 @@ detect_ai_clis() {
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     ok "Detected Codex CLI ($(command -v codex))"
   fi
-  if [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
+  if have agy && FX_PROVIDER=antigravity FX_AI_READY_TIMEOUT=10 bash -c '
+    source "$1"
+    _fx_ai_ready
+  ' bash "$INSTALL_DIR/fixit-common.sh"; then
+    HAVE_ANTIGRAVITY=1
     ok "Detected Antigravity CLI ($(command -v agy))"
+  elif have agy; then
+    warn "Antigravity CLI found but not authenticated; run agy to sign in"
   fi
 }
 
@@ -811,6 +816,10 @@ if pick:
 
 # ---------- smoke test ----------
 test_ai() {
+  if [[ "$PROVIDER" == "antigravity" && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
+    err "Antigravity CLI is unavailable or not authenticated; run agy to sign in"
+    return 1
+  fi
   [[ "$SKIP_AI_TEST" -eq 1 ]] && return 0
   [[ "$PROVIDER" == "none" ]] && return 0
 
@@ -832,11 +841,6 @@ test_ai() {
     warn "Skipping AI test (codex missing)"
     return 0
   fi
-  if [[ "$PROVIDER" == "antigravity" && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
-    warn "Skipping AI test (agy missing)"
-    return 0
-  fi
-
   info "Testing AI backend ($PROVIDER)…"
   local sug rc=0
   local test_shell="zsh" test_file="$INSTALL_DIR/fixit.zsh"
@@ -887,6 +891,10 @@ test_ai() {
 
   warn "AI test returned no command (auth/network/model?)."
   if ! is_interactive; then
+    if [[ "$PROVIDER" == "antigravity" ]]; then
+      err "Antigravity AI test failed; configuration was not written"
+      return 1
+    fi
     warn "Continuing anyway (non-interactive)."
     return 0
   fi

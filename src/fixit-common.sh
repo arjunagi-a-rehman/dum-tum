@@ -249,6 +249,20 @@ _fx_shell_name() {
   if [[ -n "${ZSH_VERSION:-}" ]]; then printf 'zsh'; else printf 'bash'; fi
 }
 
+_fx_antigravity_ready() {
+  command -v agy >/dev/null 2>&1 || return 1
+  case "${_FX_ANTIGRAVITY_READY:-}" in
+    1) return 0 ;;
+    0) return 1 ;;
+  esac
+  if _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy -p /usage --output-format text >/dev/null; then
+    _FX_ANTIGRAVITY_READY=1
+    return 0
+  fi
+  _FX_ANTIGRAVITY_READY=0
+  return 1
+}
+
 _fx_ai_ready() {
   case "${FX_PROVIDER:-openrouter}" in
     openrouter) [[ -n "${OPENROUTER_API_KEY:-}" ]] ;;
@@ -258,7 +272,7 @@ _fx_ai_ready() {
     opencode)   command -v opencode >/dev/null 2>&1 ;;
     claude)     command -v claude >/dev/null 2>&1 ;;
     codex)      command -v codex >/dev/null 2>&1 ;;
-    antigravity) command -v agy >/dev/null 2>&1 ;;
+    antigravity) _fx_antigravity_ready ;;
     none|off|local|"") return 1 ;;
     *) return 1 ;;
   esac
@@ -329,9 +343,17 @@ _fx_ai_gemini() {  # $* = intent
 # Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
 _fx_timeout() {  # $1=seconds, $2...=cmd
   local secs="$1"; shift
-  local tmpout rc=0
+  local tmpout tmpin="" rc=0
   tmpout="$(mktemp)"
-  "$@" >"$tmpout" 2>/dev/null &
+  if [[ ! -t 0 ]]; then
+    tmpin="$(mktemp)"
+    cat >"$tmpin"
+  fi
+  if [[ -n "$tmpin" ]]; then
+    "$@" <"$tmpin" >"$tmpout" 2>/dev/null &
+  else
+    "$@" </dev/null >"$tmpout" 2>/dev/null &
+  fi
   local pid=$!
   local waited=0
   while kill -0 "$pid" 2>/dev/null; do
@@ -346,9 +368,12 @@ _fx_timeout() {  # $1=seconds, $2...=cmd
     sleep 1
     (( waited += 1 ))
   done
-  (( rc == 0 )) && wait "$pid" 2>/dev/null
+  if (( rc == 0 )); then
+    wait "$pid" 2>/dev/null || rc=$?
+  fi
   cat "$tmpout"
   rm -f "$tmpout"
+  [[ -n "$tmpin" ]] && rm -f "$tmpin"
   return $rc
 }
 
@@ -390,11 +415,19 @@ _fx_ai_codex() {  # $* = intent
 }
 
 _fx_ai_antigravity() {  # $* = intent
-  local prompt margs=()
+  local prompt body run_dir response margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
+  body="$(printf '%s' "$prompt" | python3 "$_FX_AI_PY" body-antigravity)"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fixit-agy.XXXXXX")" || return 1
   [[ -n "${FX_MODEL:-}" ]] && margs+=(--model "$FX_MODEL")
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(--effort "$FX_VARIANT")
-  _fx_timeout "${FX_AI_TIMEOUT:-90}" agy -p "$prompt" --output-format text "${margs[@]}" | _fx_ai_extract
+  response="$(printf '%s\n' "$body" | (
+    cd "$run_dir" || exit 1
+    _fx_timeout "${FX_AI_TIMEOUT:-90}" agy --input-format stream-json \
+      --output-format stream-json "${margs[@]}"
+  ) | _fx_ai_extract)"
+  rm -rf "$run_dir"
+  printf '%s\n' "$response"
 }
 
 _fx_ai() {  # $* = intent or failed command -> prints one suggested command

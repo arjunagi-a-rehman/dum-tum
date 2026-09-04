@@ -224,6 +224,13 @@ class TestParsePayload(unittest.TestCase):
         })
         self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
 
+    def test_antigravity_stream_result_shape(self):
+        body = json.dumps({
+            "event": "result",
+            "result": {"status": "SUCCESS", "response": "ls -la\n"},
+        })
+        self.assertEqual(fixit_ai.parse_payload(body), "ls -la\n")
+
     def test_non_json_mixed_lines_passthrough(self):
         raw = "some prose\nls -la"
         self.assertEqual(fixit_ai.parse_payload(raw), raw)
@@ -324,6 +331,23 @@ class TestBodyCommand(unittest.TestCase):
             body["contents"],
             [{"role": "user", "parts": [{"text": "user prompt"}]}],
         )
+
+    def test_body_antigravity_structure(self):
+        import io
+        from contextlib import redirect_stdout
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO("user prompt")
+        buf = io.StringIO()
+        try:
+            with redirect_stdout(buf):
+                fixit_ai.cmd_body_antigravity()
+        finally:
+            sys.stdin = old_stdin
+        body = json.loads(buf.getvalue())
+        self.assertEqual(body, {
+            "event": "user",
+            "message": {"content": "user prompt"},
+        })
 
 
 class TestExtractCommand(unittest.TestCase):

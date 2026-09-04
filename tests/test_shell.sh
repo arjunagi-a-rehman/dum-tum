@@ -205,26 +205,51 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
 (
   FX_PROVIDER=antigravity
   mkdir -p bin
-  printf '#!/bin/sh\nexit 0\n' > bin/agy
+  printf '#!/bin/sh\n[ "$1" = "-p" ] && [ "$2" = "/usage" ]\n' > bin/agy
   chmod +x bin/agy
   PATH="$TMPD/bin:$PATH"
-  check_rc "_fx_ai_ready antigravity on PATH" 0 _fx_ai_ready
+  check_rc "_fx_ai_ready antigravity authenticated" 0 _fx_ai_ready
 )
 (
-  printf '%s\n' '#!/usr/bin/env bash' \
-    '[[ "$1" == "-p" ]] || exit 1' \
-    '[[ "$2" == *"Task/failed input: list files"* ]] || exit 1' \
-    '[[ "$3" == "--output-format" && "$4" == "text" ]] || exit 1' \
-    '[[ "$5" == "--model" && "$6" == "test-model" ]] || exit 1' \
-    '[[ "$7" == "--effort" && "$8" == "high" ]] || exit 1' \
-    'printf "ls -la\\n"' > bin/agy
+  FX_PROVIDER=antigravity
+  mkdir -p bin
+  printf '#!/bin/sh\nexit 1\n' > bin/agy
   chmod +x bin/agy
   PATH="$TMPD/bin:$PATH"
+  check_rc "_fx_ai_ready antigravity unauthenticated" 1 _fx_ai_ready
+)
+out=$(
+  printf '%s\n' '#!/usr/bin/env bash' \
+    '[[ "$PWD" != "$FX_TEST_ORIGINAL_CWD" ]] || exit 1' \
+    '[[ "$1" == "--input-format" && "$2" == "stream-json" ]] || exit 1' \
+    '[[ "$3" == "--output-format" && "$4" == "stream-json" ]] || exit 1' \
+    '[[ "$5" == "--model" && "$6" == "test-model" ]] || exit 1' \
+    '[[ "$7" == "--effort" && "$8" == "high" ]] || exit 1' \
+    '[[ "$#" == 8 ]] || exit 1' \
+    'IFS= read -r payload' \
+    '[[ "$payload" == *"Task/failed input: list files"* ]] || exit 1' \
+    "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ls -la\\n\"}}'" > bin/agy
+  chmod +x bin/agy
+  PATH="$TMPD/bin:$PATH"
+  export FX_TEST_ORIGINAL_CWD="$PWD"
   FX_MODEL=test-model
   FX_VARIANT=high
-  out=$(_fx_ai_antigravity list files)
-  check_eq "_fx_ai_antigravity invocation" 'ls -la' "$out"
+  _fx_ai_antigravity list files
 )
+check_eq "_fx_ai_antigravity stdin and isolation" 'ls -la' "$out"
+
+mkdir -p "$TMPD/install-home"
+check_rc "installer rejects unauthenticated antigravity" 1 env \
+  HOME="$TMPD/install-home" \
+  FIXIT_HOME="$TMPD/install-target" \
+  PATH="$TMPD/bin:$PATH" \
+  SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider antigravity --shell zsh
+if [[ ! -e "$TMPD/install-home/.zshrc" ]]; then
+  ok "installer does not write config for unauthenticated antigravity"
+else
+  bad "installer does not write config for unauthenticated antigravity"
+fi
 (
   FX_PROVIDER=off
   check_rc "_fx_ai_ready off alias" 1 _fx_ai_ready
@@ -232,8 +257,11 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
 
 # ---------- _fx_timeout ----------
 check_rc "_fx_timeout fast command" 0 _fx_timeout 5 true
+check_rc "_fx_timeout preserves failure" 7 _fx_timeout 5 sh -c 'exit 7'
 out=$(_fx_timeout 5 printf 'hello')
 check_eq "_fx_timeout captures stdout" 'hello' "$out"
+out=$(printf 'hello stdin' | _fx_timeout 5 cat)
+check_eq "_fx_timeout passes stdin" 'hello stdin' "$out"
 start=$SECONDS
 _fx_timeout 2 sleep 10 >/dev/null 2>&1
 rc=$?
