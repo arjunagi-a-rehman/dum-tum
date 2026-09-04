@@ -274,8 +274,8 @@ _fx_ai_ready() {
   esac
 }
 
-_fx_ai_extract() {  # stdin: free text or JSON/JSONL -> one command on stdout
-  python3 "$_FX_AI_PY" extract
+_fx_ai_extract() {  # $1=provider output kind; stdin -> one command on stdout
+  python3 "$_FX_AI_PY" extract "$1"
 }
 
 
@@ -301,7 +301,7 @@ _fx_ai_openrouter() {  # $* = intent
   user_p="$(_fx_ai_user_payload "$@")"
   body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
   _fx_ai_http "$body" https://openrouter.ai/api/v1/chat/completions \
-    "Authorization: Bearer $OPENROUTER_API_KEY" | _fx_ai_extract
+    "Authorization: Bearer $OPENROUTER_API_KEY" | _fx_ai_extract chat
 }
 
 _fx_ai_openai() {  # $* = intent
@@ -311,7 +311,7 @@ _fx_ai_openai() {  # $* = intent
   user_p="$(_fx_ai_user_payload "$@")"
   body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
   _fx_ai_http "$body" https://api.openai.com/v1/chat/completions \
-    "Authorization: Bearer $OPENAI_API_KEY" | _fx_ai_extract
+    "Authorization: Bearer $OPENAI_API_KEY" | _fx_ai_extract chat
 }
 
 _fx_ai_anthropic() {  # $* = intent
@@ -321,7 +321,7 @@ _fx_ai_anthropic() {  # $* = intent
   user_p="$(_fx_ai_user_payload "$@")"
   body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-anthropic)
   _fx_ai_http "$body" https://api.anthropic.com/v1/messages \
-    "x-api-key: $ANTHROPIC_API_KEY" "anthropic-version: 2023-06-01" | _fx_ai_extract
+    "x-api-key: $ANTHROPIC_API_KEY" "anthropic-version: 2023-06-01" | _fx_ai_extract anthropic
 }
 
 _fx_ai_gemini() {  # $* = intent
@@ -333,7 +333,7 @@ _fx_ai_gemini() {  # $* = intent
   key="${GEMINI_API_KEY:-$GOOGLE_API_KEY}"
   _fx_ai_http "$body" \
     "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent" \
-    "x-goog-api-key: $key" | _fx_ai_extract
+    "x-goog-api-key: $key" | _fx_ai_extract gemini
 }
 
 # Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
@@ -378,7 +378,7 @@ _fx_ai_opencode() {  # $* = intent
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(--variant "$FX_VARIANT")
-  _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run "${margs[@]}" --format json -- "$prompt" | _fx_ai_extract
+  _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run "${margs[@]}" --format json -- "$prompt" | _fx_ai_extract opencode
 }
 
 _fx_ai_claude() {  # $* = intent
@@ -388,7 +388,7 @@ _fx_ai_claude() {  # $* = intent
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(--effort "$FX_VARIANT")
   # Prompt via stdin so it is not visible in `ps` to other local users.
   printf '%s' "$prompt" | _fx_timeout "${FX_AI_TIMEOUT:-90}" \
-    claude -p --output-format json --max-turns 1 "${margs[@]}" | _fx_ai_extract
+    claude -p --output-format json --max-turns 1 "${margs[@]}" | _fx_ai_extract claude
 }
 
 _fx_ai_codex() {  # $* = intent
@@ -401,11 +401,11 @@ _fx_ai_codex() {  # $* = intent
   # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
   if _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
       -o "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null 2>&1; then
-    _fx_ai_extract <"$out"
+    _fx_ai_extract plain <"$out"
   else
     # fallback: capture stdout if -o failed / older CLI
     _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract
+      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract plain
   fi
   rm -f "$out"
 }
@@ -421,7 +421,7 @@ _fx_ai_antigravity() {  # $* = intent
     cd "$run_dir" || exit 1
     _fx_timeout "${FX_AI_TIMEOUT:-90}" agy --input-format stream-json \
       --output-format stream-json "${margs[@]}"
-  ) | _fx_ai_extract)"
+  ) | _fx_ai_extract antigravity)"
   rm -rf "$run_dir"
   printf '%s\n' "$response"
 }
