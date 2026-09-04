@@ -11,10 +11,12 @@ Usage:
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
     fixit-ai.py body-gemini     # env FX_SYS, FX_USER -> Gemini generateContent JSON body
     fixit-ai.py body-antigravity # stdin prompt -> Antigravity stream-json user event
+    fixit-ai.py rc-value NAME PATH # safely read an exported value from the dum-tum rc block
     fixit-ai.py proj            # print compact project hints for cwd (scripts, targets, markers)
 """
 
 import json
+import math
 import os
 import re
 import signal
@@ -364,11 +366,268 @@ def cmd_secrets_redact() -> None:
     sys.stdout.write(redact_secrets(sys.stdin.read()))
 
 
-def _kill_process_group(process: subprocess.Popen, sig: int) -> None:
+def _shell_literal(text: str, start: int) -> str:
+    value = []
+    index = start
+    while index < len(text):
+        char = text[index]
+        if char == "\n":
+            break
+        if char == "'":
+            end = text.find("'", index + 1)
+            if end < 0:
+                break
+            value.append(text[index + 1:end])
+            index = end + 1
+            continue
+        if char == "\\" and index + 1 < len(text):
+            value.append(text[index + 1])
+            index += 2
+            continue
+        if char == '"':
+            index += 1
+            while index < len(text) and text[index] != '"':
+                if text[index] == "\\" and index + 1 < len(text):
+                    if text[index + 1] in '\\"$`':
+                        index += 1
+                value.append(text[index])
+                index += 1
+            index += index < len(text)
+            continue
+        value.append(char)
+        index += 1
+    return "".join(value)
+
+
+def rc_export_value(text: str, name: str) -> str:
+    marker = "# >>> fixit.zsh >>>"
+    start = text.find(marker)
+    if start >= 0:
+        text = text[start + len(marker):]
+    pattern = re.compile(r"(?m)^[ \t]*export[ \t]+" + re.escape(name) + r"=")
+    quote = None
+    escaped = False
+    escaped_outside = False
+    line_start = True
+    index = 0
+    while index < len(text):
+        if line_start and quote is None:
+            match = pattern.match(text, index)
+            if match:
+                return _shell_literal(text, match.end())
+        char = text[index]
+        if quote == "'":
+            if char == "'":
+                quote = None
+        elif quote == '"':
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quote = None
+        elif escaped_outside:
+            escaped_outside = False
+        elif char == "\\":
+            escaped_outside = True
+        elif char in "'\"":
+            quote = char
+        elif char == "#" and line_start:
+            newline = text.find("\n", index)
+            if newline < 0:
+                break
+            index = newline
+            char = "\n"
+        line_start = char == "\n" or (line_start and char in " \t")
+        index += 1
+    return ""
+
+
+def cmd_rc_value(name: str, path: str) -> None:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as rc_file:
+            value = rc_export_value(rc_file.read(), name)
+    except OSError:
+        return
+    sys.stdout.write(value)
+
+
+def _help_option_declaration(line: str):
+    stripped = line.lstrip(" \t")
+    if not re.match(r"^--?[A-Za-z0-9]", stripped):
+        return None
+    head = re.split(r"(?: {2,}|\t+)", stripped, maxsplit=1)[0]
+    declared = re.findall(r"(?<![A-Za-z0-9_-])--?[A-Za-z0-9][A-Za-z0-9_-]*", head)
+    if not declared:
+        return None
+    if len(declared) > 1 and "," not in head:
+        return None
+    remainder = re.sub(
+        r"(?<![A-Za-z0-9_-])--?[A-Za-z0-9][A-Za-z0-9_-]*", "", head
+    )
+    remainder = re.sub(r"<[^>]*>|\[[^\]]*\]|\b[A-Z][A-Z0-9_-]*\b", "", remainder)
+    if remainder.replace(",", "").strip():
+        return None
+    indent = len(line[: len(line) - len(stripped)].expandtabs(8))
+    return indent, set(declared)
+
+
+def cmd_help_options(options: list) -> int:
+    lines = sys.stdin.read().splitlines()
+    declared_lines = []
+    declarations_by_line = {}
+    section = ""
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if line == line.lstrip(" \t") and stripped.endswith(":"):
+            section = stripped[:-1].lower()
+        declaration = _help_option_declaration(line)
+        if declaration is not None and not section.startswith("example"):
+            declared_lines.append((line, declaration))
+            declarations_by_line[index] = declaration
+    if not declared_lines:
+        return 1
+    base_indent = min(indent for _, (indent, _) in declared_lines)
+    allowed_indents = {base_indent}
+    if any(
+        indent == base_indent and re.match(r"^\s*-[A-Za-z0-9]\s*,", line)
+        for line, (indent, _) in declared_lines
+    ):
+        allowed_indents.add(base_indent + 4)
+
+    blocks = []
+    current_lines = []
+    current_options = set()
+    for index, line in enumerate(lines):
+        declaration = declarations_by_line.get(index)
+        if declaration is not None:
+            if current_lines:
+                blocks.append((current_options, "\n".join(current_lines)))
+            if declaration[0] in allowed_indents:
+                current_options = declaration[1]
+                current_lines = [line.strip()]
+            else:
+                current_options = set()
+                current_lines = []
+        elif current_lines and (line.startswith(" ") or line.startswith("\t")):
+            current_lines.append(line.strip())
+        elif current_lines:
+            blocks.append((current_options, "\n".join(current_lines)))
+            current_options = set()
+            current_lines = []
+    if current_lines:
+        blocks.append((current_options, "\n".join(current_lines)))
+
+    for requirement in options:
+        option, separator, value = requirement.partition("=")
+        candidates = [text for declared, text in blocks if option in declared]
+        if not candidates:
+            return 1
+        if separator:
+            value_re = re.compile(rf"(?<![A-Za-z0-9_-]){re.escape(value)}(?![A-Za-z0-9_-])")
+            if not any(value_re.search(block) for block in candidates):
+                return 1
+    return 0
+
+
+def _all_policy_values(value, required) -> bool:
+    if isinstance(value, dict):
+        return bool(value) and all(_all_policy_values(item, required) for item in value.values())
+    if isinstance(required, bool):
+        return value is required
+    return value == required
+
+
+def _nested_policies_are_safe(value) -> bool:
+    if isinstance(value, list):
+        return all(_nested_policies_are_safe(item) for item in value)
+    if not isinstance(value, dict):
+        return True
+    for key, item in value.items():
+        if key == "permission" and not _all_policy_values(item, "deny"):
+            return False
+        if key == "tools" and not _all_policy_values(item, False):
+            return False
+        if not _nested_policies_are_safe(item):
+            return False
+    return True
+
+
+def cmd_opencode_config_deny() -> int:
+    try:
+        config = json.load(sys.stdin)
+    except (json.JSONDecodeError, TypeError):
+        return 1
+    if not isinstance(config, dict) or config.get("plugin") != []:
+        return 1
+    permissions = config.get("permission")
+    tools = config.get("tools")
+    if not isinstance(permissions, dict) or permissions.get("*") != "deny":
+        return 1
+    if not isinstance(tools, dict) or tools.get("*") is not False:
+        return 1
+    if not _all_policy_values(permissions, "deny") or not _all_policy_values(tools, False):
+        return 1
+    if any(scope in config and not isinstance(config[scope], dict) for scope in ("agent", "mode")):
+        return 1
+    if not _nested_policies_are_safe(config):
+        return 1
+    return 0
+
+
+def _signal_process(process: subprocess.Popen, sig: int) -> None:
     try:
         os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        try:
+            process.send_signal(sig)
+        except ProcessLookupError:
+            pass
+
+
+def _stop_process(process: subprocess.Popen) -> tuple:
+    _signal_process(process, signal.SIGTERM)
+    try:
+        output = process.communicate(timeout=0.5)
+        _signal_process(process, signal.SIGKILL)
+        return output
+    except subprocess.TimeoutExpired:
+        _signal_process(process, signal.SIGKILL)
+        try:
+            return process.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            return process.communicate(timeout=2)
+
+
+def _cleanup_process(process: subprocess.Popen) -> None:
+    try:
+        _stop_process(process)
+        return
+    except BaseException:
+        pass
+    try:
+        _signal_process(process, signal.SIGKILL)
+    except BaseException:
+        pass
+    try:
+        process.kill()
     except (ProcessLookupError, PermissionError):
         pass
+    try:
+        process.communicate(timeout=2)
+    except BaseException:
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 
 
 def _write_process_output(stdout: bytes, stderr: bytes) -> None:
@@ -378,6 +637,11 @@ def _write_process_output(stdout: bytes, stderr: bytes) -> None:
     if stderr:
         sys.stderr.buffer.write(stderr)
         sys.stderr.buffer.flush()
+
+
+class _SupervisorSignal(Exception):
+    def __init__(self, signum: int):
+        self.signum = signum
 
 
 def run_with_timeout(seconds: float, command: list) -> int:
@@ -397,23 +661,36 @@ def run_with_timeout(seconds: float, command: list) -> int:
         sys.stderr.write(f"{command[0]}: permission denied\n")
         return 126
 
-    timed_out = False
+    handled_signals = tuple(
+        sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None))
+        if sig is not None
+    )
+    previous_handlers = {sig: signal.getsignal(sig) for sig in handled_signals}
+
+    def forward_signal(signum, _frame):
+        _signal_process(process, signum)
+        raise _SupervisorSignal(signum)
+
     try:
-        stdout, stderr = process.communicate(timeout=seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_process_group(process, signal.SIGTERM)
+        for sig in handled_signals:
+            signal.signal(sig, forward_signal)
         try:
-            stdout, stderr = process.communicate(timeout=0.5)
+            stdout, stderr = process.communicate(timeout=seconds)
         except subprocess.TimeoutExpired:
-            _kill_process_group(process, signal.SIGKILL)
-            stdout, stderr = process.communicate()
-        else:
-            _kill_process_group(process, signal.SIGKILL)
+            stdout, stderr = _stop_process(process)
+            _write_process_output(stdout, stderr)
+            return 124
+    except _SupervisorSignal as exc:
+        _cleanup_process(process)
+        return 128 + exc.signum
+    except BaseException:
+        _cleanup_process(process)
+        raise
+    finally:
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
     _write_process_output(stdout, stderr)
-    if timed_out:
-        return 124
     return process.returncode if process.returncode >= 0 else 128 - process.returncode
 
 
@@ -426,7 +703,7 @@ def cmd_timeout(args: list) -> int:
     except ValueError:
         sys.stderr.write(f"invalid timeout: {args[0]}\n")
         return 2
-    if seconds < 0:
+    if not math.isfinite(seconds) or seconds < 0:
         sys.stderr.write(f"invalid timeout: {args[0]}\n")
         return 2
     return run_with_timeout(seconds, args[1:])
@@ -527,6 +804,12 @@ def main() -> None:
         cmd_secrets_detect()
     elif mode == "secrets-redact":
         cmd_secrets_redact()
+    elif mode == "rc-value" and len(sys.argv) == 4:
+        cmd_rc_value(sys.argv[2], sys.argv[3])
+    elif mode == "help-options":
+        raise SystemExit(cmd_help_options(sys.argv[2:]))
+    elif mode == "opencode-config-deny":
+        raise SystemExit(cmd_opencode_config_deny())
     elif mode == "timeout":
         raise SystemExit(cmd_timeout(sys.argv[2:]))
     elif mode in ("body", "body-openrouter"):
