@@ -255,4 +255,42 @@ cmp "$preflight_home/zshrc-original" "$preflight_home/.zshrc"
 cmp "$preflight_home/bashrc-original" "$preflight_home/.bashrc"
 grep -qxF 'runtime-still-here' "$TMPD/uninstall-preflight-target/runtime"
 
+mkdir -p "$TMPD/pinned-home" "$TMPD/fake-bin"
+cp "$ROOT/tests/fixtures/curl" "$TMPD/fake-bin/curl"
+chmod +x "$TMPD/fake-bin/curl"
+: > "$TMPD/curl-log"
+env \
+  HOME="$TMPD/pinned-home" \
+  FIXIT_HOME="$TMPD/pinned-install" \
+  FIXIT_TEST_ROOT="$ROOT" \
+  FIXIT_TEST_CURL_LOG="$TMPD/curl-log" \
+  PATH="$TMPD/fake-bin:/usr/bin:/bin" \
+  SHELL=/bin/bash \
+  /bin/bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    < "$ROOT/install.sh" > "$TMPD/pinned-output"
+assert_runtime_matches_repo "$TMPD/pinned-install"
+[[ "$(wc -l < "$TMPD/curl-log" | tr -d ' ')" == 4 ]]
+if grep -v '/1111111111111111111111111111111111111111/src/' "$TMPD/curl-log"; then
+  exit 1
+fi
+grep -q 'Pinned runtime source: 1111111111111111111111111111111111111111' "$TMPD/pinned-output"
+
+mkdir -p "$TMPD/invalid-home"
+: > "$TMPD/invalid-curl-log"
+if env \
+  HOME="$TMPD/invalid-home" \
+  FIXIT_HOME="$TMPD/invalid-install" \
+  FIXIT_TEST_ROOT="$ROOT" \
+  FIXIT_TEST_CURL_LOG="$TMPD/invalid-curl-log" \
+  FIXIT_TEST_API_SHA=main \
+  PATH="$TMPD/fake-bin:/usr/bin:/bin" \
+  SHELL=/bin/bash \
+  /bin/bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    < "$ROOT/install.sh" > "$TMPD/invalid-output" 2>&1; then
+  exit 1
+fi
+[[ ! -s "$TMPD/invalid-curl-log" ]]
+[[ ! -e "$TMPD/invalid-install" ]]
+grep -q 'GitHub returned an invalid dum-tum revision' "$TMPD/invalid-output"
+
 printf 'Installer tests passed\n'
