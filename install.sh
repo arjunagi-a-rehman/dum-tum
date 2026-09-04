@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fixit.zsh installer — macOS + Ubuntu/Debian Linux
+# dum-tum installer — macOS + Ubuntu/Debian Linux
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 #   npx github:arjunagi-a-rehman/dum-tum
@@ -43,7 +43,7 @@ DO_BASH=0
 
 usage() {
   cat <<'EOF'
-fixit.zsh installer (macOS + Ubuntu/Linux)
+dum-tum installer (macOS + Ubuntu/Linux)
 
 Usage:
   ./install.sh [options]
@@ -58,7 +58,7 @@ Options:
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
   --skip-ai-test    Skip the post-setup AI smoke test
-  --uninstall       Remove fixit from ~/.zshrc and ~/.bashrc
+  --uninstall       Remove dum-tum from ~/.zshrc and ~/.bashrc
   --help, -h        Show this help
 
 Env (used when --yes / non-interactive; interactive always prompts):
@@ -984,7 +984,7 @@ EOF
   touch "$rc_file"
 
   if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
-    info "Updating existing fixit block in $rc_file"
+    info "Updating existing dum-tum block in $rc_file"
     local tmp repl_file
     tmp="$(mktemp)"
     repl_file="$(mktemp)"
@@ -1001,7 +1001,7 @@ EOF
     fi
     mv "$tmp" "$rc_file"
   else
-    info "Appending fixit block to $rc_file"
+    info "Appending dum-tum block to $rc_file"
     printf '\n%s\n' "$block" >> "$rc_file"
   fi
 
@@ -1042,7 +1042,7 @@ ensure_shell_default() {
   fi
 
   if [[ "$DO_BASH" -eq 1 && "$shell_now" != "bash" ]]; then
-    warn "fixit for bash is configured in $BASHRC — it loads when you run bash."
+    warn "dum-tum for Bash is configured in $BASHRC — it loads when you run Bash."
   fi
 }
 
@@ -1069,7 +1069,7 @@ print_next_steps() {
   cat <<EOF
 
 ┌─────────────────────────────────────────────────────────┐
-│  fixit installed on $OS_NAME
+│  dum-tum installed on $OS_NAME
 │  Scripts:  $INSTALL_DIR$cfg_lines
 │  AI:       $ai_hint
 └─────────────────────────────────────────────────────────┘
@@ -1127,7 +1127,7 @@ uninstall_rc() {
 }
 
 uninstall_fixit() {
-  info "Uninstalling fixit…"
+  info "Uninstalling dum-tum…"
   local removed=0
 
   # Leave a tiny marker block that unsets exports so `source ~/.zshrc`
@@ -1136,7 +1136,7 @@ uninstall_fixit() {
   local cleanup
   cleanup=$(cat <<EOF
 $MARKER_BEGIN
-# fixit uninstalled — clear leftover exports when you source this file
+# dum-tum uninstalled — clear leftover exports when you source this file
 unset FX_PROVIDER FX_MODEL FX_VARIANT OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY 2>/dev/null || true
 $MARKER_END
 EOF
@@ -1157,7 +1157,7 @@ EOF
   if [[ "$removed" -eq 0 ]]; then
     warn "Nothing to uninstall."
   else
-    ok "fixit uninstalled"
+    ok "dum-tum uninstalled"
     echo ""
     echo "Finish cleanup in this shell:"
     echo "  source $ZSHRC      # zsh"
@@ -1173,7 +1173,7 @@ main() {
     return 0
   fi
 
-  info "Installing fixit for ${OS_NAME}…"
+  info "Installing dum-tum for ${OS_NAME}…"
   select_shells
   install_deps
   install_script
