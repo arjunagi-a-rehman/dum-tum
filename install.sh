@@ -10,11 +10,15 @@
 set -euo pipefail
 
 REPO_RAW="${FIXIT_RAW:-https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main}"
+FIXIT_HOME_WAS_SET="${FIXIT_HOME+x}"
 INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 BASHRC="$HOME/.bashrc"
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
+INSTALL_SENTINEL=".dum-tum-install"
+INSTALL_SENTINEL_VALUE="dum-tum-install-v1"
+UNINSTALL_TARGET=""
 
 INSTALLER_SOURCE="${BASH_SOURCE[0]:-}"
 SELF_DIR=""
@@ -247,6 +251,120 @@ preflight_rc_uninstall() {
   fi
 }
 
+runtime_files_present() {
+  local target="$1" f
+  for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
+    [[ -f "$target/$f" && ! -L "$target/$f" ]] || return 1
+  done
+}
+
+legacy_install_signature() {
+  local target="$1" line
+  runtime_files_present "$target" || return 1
+  IFS= read -r line < "$target/fixit-common.sh" || return 1
+  [[ "$line" == '# shellcheck shell=bash' ]] || return 1
+  IFS= read -r line < "$target/fixit.zsh" || return 1
+  [[ "$line" == '# fixit.zsh — zsh adapter. Shared logic lives in fixit-common.sh.' ]] || return 1
+  IFS= read -r line < "$target/fixit.bash" || return 1
+  [[ "$line" == '# fixit.bash — bash adapter (bash 4+). Shared logic lives in fixit-common.sh.' ]] || return 1
+  line="$(sed -n '2p' "$target/fixit-ai.py")"
+  [[ "$line" == '"""fixit AI helpers.' ]]
+}
+
+install_identity_valid() {
+  local target="$1" sentinel="$1/$INSTALL_SENTINEL" lines
+  if [[ -e "$sentinel" || -L "$sentinel" ]]; then
+    [[ -f "$sentinel" && ! -L "$sentinel" ]] || return 1
+    runtime_files_present "$target" || return 1
+    lines="$(wc -l < "$sentinel")"
+    [[ "$lines" -eq 1 ]] || return 1
+    grep -qxF "$INSTALL_SENTINEL_VALUE" "$sentinel"
+    return
+  fi
+  legacy_install_signature "$target"
+}
+
+target_contains_path() {
+  local target="$1" protected="$2"
+  [[ "$protected" == "$target" || "$protected" == "$target/"* ]]
+}
+
+validate_uninstall_target() {
+  local target home_path pwd_path protected
+  UNINSTALL_TARGET=""
+  if [[ "$FIXIT_HOME_WAS_SET" == x && -z "${FIXIT_HOME:-}" ]]; then
+    err "Refusing to uninstall with an empty FIXIT_HOME"
+    return 1
+  fi
+  if [[ ! -e "$INSTALL_DIR" && ! -L "$INSTALL_DIR" ]]; then
+    return 0
+  fi
+  if [[ -L "$INSTALL_DIR" ]]; then
+    err "Refusing to uninstall a symlinked FIXIT_HOME: $INSTALL_DIR"
+    return 1
+  fi
+  if [[ ! -d "$INSTALL_DIR" ]]; then
+    err "Refusing to uninstall non-directory FIXIT_HOME: $INSTALL_DIR"
+    return 1
+  fi
+  target="$(cd -P "$INSTALL_DIR" 2>/dev/null && pwd)" || return 1
+  case "$target" in
+    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/proc|/run|/sbin|/tmp|/usr|/var)
+      err "Refusing to uninstall dangerous path: $target"
+      return 1
+      ;;
+  esac
+  home_path="$(cd -P "$HOME" 2>/dev/null && pwd)" || return 1
+  pwd_path="$(pwd -P)"
+  for protected in "$home_path" "$pwd_path" ${SELF_DIR:+"$SELF_DIR"}; do
+    if target_contains_path "$target" "$protected"; then
+      err "Refusing to uninstall protected path: $target"
+      return 1
+    fi
+  done
+  if ! install_identity_valid "$target"; then
+    err "Refusing to remove $target: no valid dum-tum installation identity"
+    return 1
+  fi
+  UNINSTALL_TARGET="$target"
+}
+
+validate_install_target() {
+  [[ ! -L "$INSTALL_DIR" ]] || {
+    err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
+    return 1
+  }
+  [[ ! -e "$INSTALL_DIR" || -d "$INSTALL_DIR" ]] || {
+    err "Refusing to install into non-directory FIXIT_HOME: $INSTALL_DIR"
+    return 1
+  }
+  if [[ -d "$INSTALL_DIR" && -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
+    if ! install_identity_valid "$INSTALL_DIR"; then
+      err "Refusing to install into non-empty directory without a valid dum-tum identity: $INSTALL_DIR"
+      return 1
+    fi
+  fi
+}
+
+remove_install_dir() {
+  local target="$1" parent quarantine
+  if [[ -L "$target" || ! -d "$target" ]] || ! install_identity_valid "$target"; then
+    err "Installation target changed after validation; refusing to remove it: $target"
+    return 1
+  fi
+  parent="$(dirname "$target")"
+  quarantine="$(mktemp -d "$parent/.dum-tum-uninstall.XXXXXX")" || return 1
+  if ! mv "$target" "$quarantine/install"; then
+    rmdir "$quarantine" 2>/dev/null || true
+    return 1
+  fi
+  if ! rm -rf "$quarantine"; then
+    err "Could not remove quarantined installation: $quarantine"
+    return 1
+  fi
+  ok "Removed $target"
+}
+
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Darwin) OS_NAME="macOS" ;;
@@ -362,7 +480,7 @@ install_deps() {
 
 install_script() {
   mkdir -p "$INSTALL_DIR"
-  local f use_local=0
+  local f use_local=0 sentinel_tmp
   if [[ -n "$SELF_DIR" ]]; then
     use_local=1
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
@@ -381,6 +499,19 @@ install_script() {
     done
   fi
   chmod 644 "$INSTALL_DIR"/fixit-common.sh "$INSTALL_DIR"/fixit.zsh "$INSTALL_DIR"/fixit.bash "$INSTALL_DIR"/fixit-ai.py
+  sentinel_tmp="$(mktemp "$INSTALL_DIR/.dum-tum-install.XXXXXX")" || return 1
+  printf '%s\n' "$INSTALL_SENTINEL_VALUE" > "$sentinel_tmp" || {
+    rm -f "$sentinel_tmp"
+    return 1
+  }
+  chmod 644 "$sentinel_tmp" || {
+    rm -f "$sentinel_tmp"
+    return 1
+  }
+  mv "$sentinel_tmp" "$INSTALL_DIR/$INSTALL_SENTINEL" || {
+    rm -f "$sentinel_tmp"
+    return 1
+  }
   ok "Installed → $INSTALL_DIR"
 }
 
@@ -1273,6 +1404,7 @@ uninstall_fixit() {
   info "Uninstalling fixit…"
   local removed=0 rc=0
 
+  validate_uninstall_target || return 1
   preflight_rc_uninstall || return 1
   uninstall_rc "$ZSHRC" || rc=$?
   case "$rc" in
@@ -1288,9 +1420,8 @@ uninstall_fixit() {
     *) return "$rc" ;;
   esac
 
-  if [[ -e "$INSTALL_DIR" ]]; then
-    rm -rf "$INSTALL_DIR"
-    ok "Removed $INSTALL_DIR"
+  if [[ -n "$UNINSTALL_TARGET" ]]; then
+    remove_install_dir "$UNINSTALL_TARGET" || return 1
     removed=1
   else
     warn "Install dir not found: $INSTALL_DIR"
@@ -1315,6 +1446,7 @@ main() {
   info "Installing fixit for ${OS_NAME}…"
   select_shells
   preflight_rc_updates
+  validate_install_target
   install_deps
   install_script
   detect_ai_clis
