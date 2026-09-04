@@ -143,7 +143,7 @@ What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detec
 | `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `codex` · `antigravity` · `none` |
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
-| `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call is killed |
+| `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call and its descendants are killed |
 | `FX_AI_ON_FAIL` | `1` | automatically ask AI to suggest fixes for eligible failed commands |
 | `OPENROUTER_API_KEY` | — | required only for `openrouter` |
 | `OPENAI_API_KEY` | — | required only for `openai` |

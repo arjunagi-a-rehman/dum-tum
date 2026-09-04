@@ -340,41 +340,9 @@ _fx_ai_gemini() {  # $* = intent
     "x-goog-api-key: $key" | _fx_ai_extract gemini
 }
 
-# Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
 _fx_timeout() {  # $1=seconds, $2...=cmd
   local secs="$1"; shift
-  local tmpout tmpin="" rc=0
-  tmpout="$(mktemp)"
-  if [[ ! -t 0 ]]; then
-    tmpin="$(mktemp)"
-    cat >"$tmpin"
-  fi
-  if [[ -n "$tmpin" ]]; then
-    "$@" <"$tmpin" >"$tmpout" 2>/dev/null &
-  else
-    "$@" </dev/null >"$tmpout" 2>/dev/null &
-  fi
-  local pid=$!
-  local waited=0
-  while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= secs )); then
-      kill "$pid" 2>/dev/null
-      sleep 1
-      kill -9 "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      rc=124
-      break
-    fi
-    sleep 1
-    (( waited += 1 ))
-  done
-  if (( rc == 0 )); then
-    wait "$pid" 2>/dev/null || rc=$?
-  fi
-  cat "$tmpout"
-  rm -f "$tmpout"
-  [[ -n "$tmpin" ]] && rm -f "$tmpin"
-  return $rc
+  python3 "$_FX_AI_PY" timeout "$secs" "$@"
 }
 
 _fx_ai_opencode() {  # $* = intent
@@ -409,7 +377,7 @@ _fx_ai_codex() {  # $* = intent
   else
     # fallback: capture stdout if -o failed / older CLI
     _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract plain
+      "${margs[@]}" -- "$prompt" </dev/null | _fx_ai_extract plain
   fi
   rm -f "$out"
 }
