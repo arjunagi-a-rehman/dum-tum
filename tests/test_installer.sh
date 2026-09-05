@@ -1214,4 +1214,20 @@ fi
 [[ ! -e "$TMPD/invalid-install" ]]
 grep -q 'GitHub returned an invalid dum-tum revision' "$TMPD/invalid-output"
 
+mkdir -p "$TMPD/review-extra-home"
+run_local_install "$TMPD/review-extra-home" "$TMPD/review-extra-install" bash >/dev/null
+mkdir "$TMPD/review-extra-install/user-data"
+printf 'keep me\n' > "$TMPD/review-extra-install/user-data/custom"
+ln -s user-data/custom "$TMPD/review-extra-install/custom-link"
+run_local_install "$TMPD/review-extra-home" "$TMPD/review-extra-install" bash >/dev/null
+[[ "$(cat "$TMPD/review-extra-install/user-data/custom")" == 'keep me' ]]
+[[ -L "$TMPD/review-extra-install/custom-link" ]]
+mkdir -p "$TMPD/review-broken-source/src" "$TMPD/review-broken-home"
+cp "$ROOT/install.sh" "$TMPD/review-broken-source/"
+cp "$ROOT/src/"* "$TMPD/review-broken-source/src/"
+printf '\nif then\n' >> "$TMPD/review-broken-source/src/fixit.bash"
+if env HOME="$TMPD/review-broken-home" FIXIT_HOME="$TMPD/review-broken-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ "$TMPD/review-broken-source/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$TMPD/review-broken-install" ]]
+
 printf 'Installer tests passed\n'
