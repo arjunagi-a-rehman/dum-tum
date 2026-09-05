@@ -428,7 +428,14 @@ def repair_failed_line(line: str, safe_heads: list, candidates=None, cwd: str = 
         raw_word = line[start:end]
         if raw_word.count(value) != 1:
             return "edit", value, best, line
-        replacement = shlex.quote(best)
+        if raw_word == '"' + value + '"':
+            replacement = '"' + re.sub(r'([\\"$`])', r'\\\1', best) + '"'
+        elif raw_word == "'" + value + "'":
+            replacement = "'" + best.replace("'", "'\\''") + "'"
+        elif raw_word == value:
+            replacement = shlex.quote(best)
+        else:
+            return "edit", value, best, line
         repaired = line[:start] + replacement + line[end:]
         if not has_assignments and not re.search(r'''['"\\|&;<>()$`*?\[\]{}#!~\n]''', repaired):
             return "argv", value, best, repaired

@@ -45,6 +45,14 @@ class TestHeadOf(unittest.TestCase):
 
 
 class TestRepairFailedLine(unittest.TestCase):
+    def test_repaired_filename_is_one_literal_argument(self):
+        import shlex
+        for name in ("document file.txt", "document*.txt", "document'file.txt", 'document$HOME.txt'):
+            original = name.replace(" ", "").replace("*", "").replace("'", "").replace("$", "")
+            result = fixit_ai.repair_failed_line("cat " + original, ["cat"], candidates=[name])
+            self.assertEqual(shlex.split(result[3]), ["cat", name])
+            self.assertEqual(result[0], "run")
+
     def test_preserves_shell_syntax_around_repaired_span(self):
         raw = 'cat "dcoument.txt" | wc -c > "$OUT" && printf "$KEEP"'
         repaired = fixit_ai.repair_failed_line(raw, ["cat"], ["document.txt"])
