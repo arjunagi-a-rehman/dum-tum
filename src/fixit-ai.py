@@ -70,7 +70,7 @@ _SECRET_VALUE_PATTERNS = (
         r'(?i)(?<![A-Z0-9_])(?P<prefix>["\']?(?:'
         r'api[-_ ]?key|apikey|access[-_ ]?key|client[-_ ]?secret|password|passwd|'
         r'auth[-_ ]?token|token|secret|credentials?'
-        r')["\']?\s*(?:=\s*|:\s+))' + _SECRET_VALUE
+        r')["\']?\s*(?:=\s*|:\s+|:(?=["\'])))' + _SECRET_VALUE
     ),
 )
 
