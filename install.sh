@@ -215,14 +215,18 @@ validate_managed_block() {
     err "Refusing to update non-file rc path: $rc_file"
     return 1
   fi
+  if [[ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_nlink)' "$target")" -gt 1 ]]; then
+    err "Refusing to replace hard-linked rc file: $rc_file"
+    return 1
+  fi
   if ! awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
-    index($0, begin) {
+    $0 == begin {
       if ($0 != begin || state != 0) bad=1
       begins++
       state=1
       next
     }
-    index($0, end) {
+    $0 == end {
       if ($0 != end || state != 1) bad=1
       ends++
       state=2
@@ -240,6 +244,11 @@ validate_managed_block() {
 }
 
 preflight_rc_updates() {
+  if [[ "$DO_ZSH" -eq 1 && "$DO_BASH" -eq 1 ]] &&
+     [[ "$(resolve_rc_file "$ZSHRC")" == "$(resolve_rc_file "$BASHRC")" ]]; then
+    err "Bash and zsh rc paths must resolve to distinct files"
+    return 1
+  fi
   [[ "$DO_ZSH" -eq 0 ]] || validate_managed_block "$ZSHRC" || return 1
   [[ "$DO_BASH" -eq 0 ]] || validate_managed_block "$BASHRC" || return 1
 }
@@ -750,6 +759,27 @@ select_provider() {
 }
 
 # ---------- API key (openrouter/openai/anthropic/gemini) ----------
+read_saved_key() {
+  python3 - "$1" "$2" <<'PYKEY'
+import re
+import shlex
+import sys
+
+value = ""
+with open(sys.argv[1]) as source:
+    for line in source:
+        match = re.match(r"^\s*export " + re.escape(sys.argv[2]) + r"=(.*)$", line)
+        if match:
+            try:
+                words = shlex.split(match.group(1), comments=True, posix=True)
+            except ValueError:
+                continue
+            if len(words) == 1:
+                value = words[0]
+sys.stdout.write(value)
+PYKEY
+}
+
 maybe_ask_key() {
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
@@ -771,7 +801,7 @@ maybe_ask_key() {
 
   if ! is_interactive; then
     if [[ -z "$API_KEY" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
-      API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+      API_KEY="$(read_saved_key "$ZSHRC" "$key_var")"
     fi
     if [[ -n "$API_KEY" ]]; then
       ok "$label API key provided"
@@ -786,7 +816,7 @@ maybe_ask_key() {
   [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
   if [[ -z "$hint" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
     hint="(key already in zshrc — Enter keeps it, or paste a new one)"
-    API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+    API_KEY="$(read_saved_key "$ZSHRC" "$key_var")"
   fi
 
   echo ""
