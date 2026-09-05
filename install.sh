@@ -235,14 +235,18 @@ validate_marked_block() {
     err "Refusing to update non-file rc path: $rc_file"
     return 1
   fi
+  if [[ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_nlink)' "$target")" -gt 1 ]]; then
+    err "Refusing to replace hard-linked rc file: $rc_file"
+    return 1
+  fi
   if ! awk -v begin="$begin" -v end="$end" '
-    index($0, begin) {
+    $0 == begin {
       if ($0 != begin || state != 0) bad=1
       begins++
       state=1
       next
     }
-    index($0, end) {
+    $0 == end {
       if ($0 != end || state != 1) bad=1
       ends++
       state=2
@@ -264,6 +268,11 @@ validate_managed_block() {
 }
 
 preflight_rc_updates() {
+  if [[ "$DO_ZSH" -eq 1 && "$DO_BASH" -eq 1 ]] &&
+     [[ "$(resolve_rc_file "$ZSHRC")" == "$(resolve_rc_file "$BASHRC")" ]]; then
+    err "Bash and zsh rc paths must resolve to distinct files"
+    return 1
+  fi
   [[ "$DO_ZSH" -eq 0 ]] || validate_managed_block "$ZSHRC" || return 1
   [[ "$DO_BASH" -eq 0 ]] || validate_managed_block "$BASHRC" || return 1
   if [[ "$OS" == Darwin && "$DO_BASH" -eq 1 ]]; then
@@ -433,7 +442,15 @@ target_contains_path() {
   [[ "$protected" == "$target" || "$protected" == "$target/"* ]]
 }
 
+normalize_install_path() {
+  while [[ "$INSTALL_DIR" != / && ( "$INSTALL_DIR" == */ || "$INSTALL_DIR" == */. ) ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+    INSTALL_DIR="${INSTALL_DIR%/.}"
+  done
+}
+
 validate_uninstall_target() {
+  normalize_install_path
   local target home_path pwd_path protected
   UNINSTALL_TARGET=""
   if [[ "$FIXIT_HOME_WAS_SET" == x && -z "${FIXIT_HOME:-}" ]]; then
@@ -474,6 +491,7 @@ validate_uninstall_target() {
 }
 
 validate_install_target() {
+  normalize_install_path
   [[ ! -L "$INSTALL_DIR" ]] || {
     err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
     return 1
@@ -667,8 +685,11 @@ resolve_runtime_raw() {
   ok "Pinned runtime source: $sha"
 }
 
-install_script() {
-  local f use_local=0 sentinel_tmp
+install_script() (
+  local f use_local=0 sentinel_tmp destination="$INSTALL_DIR"
+  INSTALL_DIR="$(mktemp -d)" || return 1
+  trap 'rm -rf "$INSTALL_DIR"' EXIT
+  set -e
   if [[ -n "$SELF_DIR" ]]; then
     use_local=1
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
@@ -703,8 +724,12 @@ install_script() {
     rm -f "$sentinel_tmp"
     return 1
   }
-  ok "Installed → $INSTALL_DIR"
-}
+  mkdir -p "$destination"
+  for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py "$INSTALL_SENTINEL"; do
+    cp "$INSTALL_DIR/$f" "$destination/$f"
+  done
+  ok "Installed → $destination"
+)
 
 detect_ai_clis() {
   HAVE_OPENCODE=0
@@ -867,6 +892,27 @@ select_provider() {
 }
 
 # ---------- API key (openrouter/openai/anthropic/gemini) ----------
+read_saved_key() {
+  python3 - "$1" "$2" <<'PYKEY'
+import re
+import shlex
+import sys
+
+value = ""
+with open(sys.argv[1]) as source:
+    for line in source:
+        match = re.match(r"^\s*export " + re.escape(sys.argv[2]) + r"=(.*)$", line)
+        if match:
+            try:
+                words = shlex.split(match.group(1), comments=True, posix=True)
+            except ValueError:
+                continue
+            if len(words) == 1:
+                value = words[0]
+sys.stdout.write(value)
+PYKEY
+}
+
 maybe_ask_key() {
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
