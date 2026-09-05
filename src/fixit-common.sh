@@ -98,8 +98,14 @@ _fx_looks_like_nl() {
 # Candidate command list (shell-specific syntax isolated via eval)
 if [[ -n "${ZSH_VERSION:-}" ]]; then
   eval '_fx_all_commands() { print -rl -- ${(k)commands} ${(k)aliases} ${(k)functions} ${(k)builtins} }'
+  eval '_fx_run_simple_line() { local -a words; words=(${=1}); (( ${#words[@]} )) && "${words[@]}" }'
 else
   _fx_all_commands() { { compgen -c; compgen -A function; compgen -a; compgen -b; } 2>/dev/null | sort -u; }
+  _fx_run_simple_line() {
+    local -a words
+    read -r -a words <<< "$1"
+    (( ${#words[@]} )) && "${words[@]}"
+  }
 fi
 
 _fx_quote_argv() {
@@ -117,7 +123,11 @@ _fx_confirm() {
   shift 2
   [[ -z "$cmd" ]] && return 1
   printf '\033[36m→ %s\033[0m\n' "$cmd" >&2
-  printf '\033[36m[Enter] run  [e] edit  [n] cancel\033[0m ' >&2
+  if [[ "$mode" == edit ]]; then
+    printf '\033[36m[e] edit  [n] cancel\033[0m ' >&2
+  else
+    printf '\033[36m[Enter] run  [e] edit  [n] cancel\033[0m ' >&2
+  fi
   if [[ -n "${ZSH_VERSION:-}" ]]; then
     IFS= read -r -k 1 key </dev/tty || return 1
   else
@@ -127,6 +137,7 @@ _fx_confirm() {
   printf '\n' >&2
   case "$key" in
     $'\n'|$'\r')
+      [[ "$mode" == edit ]] && return 1
       if [[ "${_FX_ZLE_CONFIRM:-0}" -eq 1 ]]; then
         _FX_ZLE_CMD="$cmd"
         _FX_ZLE_ACCEPT=1
@@ -166,6 +177,10 @@ _fx_confirm_run() {
   _fx_confirm line "$1"
 }
 
+_fx_offer_edit() {
+  _fx_confirm edit "$1"
+}
+
 _fx_confirm_argv() {
   (( $# > 0 )) || return 1
   local cmd mode=argv
@@ -181,13 +196,14 @@ _fx_handle_not_found() {
   full="$(_fx_quote_argv "$cmd" "$@")"
   local out d best
 
-  # Natural language ("list all files") → AI, don't fuzzy-match the first word
-  if _fx_looks_like_nl "$@"; then
-    _fx_ai_resolve "$full"; return $?
-  fi
-
   out=$(_fx_all_commands | _fx_best "$cmd")
   d=${out%%$'\t'*}; best=${out#*$'\t'}
+  if (( $# > 0 )) && _fx_looks_like_nl "$cmd" "$@" \
+      && ! { [[ -n "$best" ]] && _fx_ok "$d" "${#cmd}" 1 \
+        && { _fx_in_list "$best" "${_FX_AUTORUN_SAFE[@]}" \
+          || _fx_in_list "$best" "${_FX_MULTICMD[@]}"; }; }; then
+    _fx_ai_resolve "$full"; return $?
+  fi
   if [[ -n "$best" ]] && _fx_ok $d ${#cmd} 1; then
     if _fx_can_autorun "$best" "$@"; then
       printf '\033[33m↻ %s → %s\033[0m\n' "$cmd" "$best" >&2
@@ -218,42 +234,37 @@ _fx_has_secrets() {
     -e '[A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*=[^[:space:]'"'"']'
 }
 
-# Shared failed-command logic. $1 = exit code, rest = words of the failed line.
+# Shared failed-command logic. $1 = exit code, $2 = raw failed line.
 # Uses _FX_LASTFAIL / _FX_FIXED from the adapter hooks.
 _fx_fix_failed_line() {
-  local rc="$1"; shift
-  (( $# == 0 )) && return
-  if _fx_in_list "$1" "${_FX_SAFE[@]}"; then
-    local head="$1"; shift
-    local -a out_args=()
-    local changed=0 arg out d fixed
-    for arg in "$@"; do
-      if (( changed )) || [[ "$arg" == -* || -e "$arg" ]]; then
-        out_args+=("$arg"); continue
-      fi
-      out=$(find . -maxdepth 2 -not -path '*/.git*' 2>/dev/null | sed 's|^\./||' | _fx_best "$arg")
-      d=${out%%$'\t'*}; fixed=${out#*$'\t'}
-      if [[ -n "$fixed" ]] && _fx_ok $d ${#arg} 2; then
-        printf '\033[33m↻ %s → %s\033[0m\n' "$arg" "$fixed" >&2
-        out_args+=("$fixed"); changed=1
-      else
-        out_args+=("$arg")
-      fi
-    done
-    if (( changed )); then
+  local raw="$2" repair kind old fixed suggested rest
+  [[ -z "$raw" ]] && return
+  repair="$(printf '%s' "$raw" | python3 "$_FX_AI_PY" repair-line "${_FX_SAFE[@]}")"
+  if [[ -n "$repair" ]]; then
+    kind=${repair%%$'\t'*}; rest=${repair#*$'\t'}
+    old=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    fixed=${rest%%$'\t'*}; suggested=${rest#*$'\t'}
+    printf '\033[33m↻ %s → %s\033[0m\n' "$old" "$fixed" >&2
+    if [[ "$kind" == argv ]]; then
       _FX_FIXED=1
-      local q
-      printf -v q '%q ' "$head" "${out_args[@]}"
-      eval "$q"
-      return
+      _fx_run_simple_line "$suggested"
+    elif [[ "$kind" == run ]]; then
+      _fx_confirm_run "$suggested" && _FX_FIXED=1
+    else
+      _fx_offer_edit "$suggested"
     fi
-    set -- "$head" "$@"
+    return
   fi
+
+  local trimmed head tail
+  trimmed="${raw#"${raw%%[![:space:]]*}"}"
+  head=${trimmed%%[[:space:]]*}
+  tail=${trimmed#"$head"}
   # Failed multi-command tool → AI suggests the fix (still needs Enter).
   (( ${FX_AI_ON_FAIL:-1} )) || return
   _fx_ai_ready || return
-  (( $# >= 2 )) || return
-  _fx_in_list "$1" "${_FX_MULTICMD[@]}" || return
+  [[ -n "$head" && -n "${tail//[[:space:]]/}" ]] || return
+  _fx_in_list "$head" "${_FX_MULTICMD[@]}" || return
   if _fx_has_secrets "$_FX_LASTFAIL"; then
     printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
     return
