@@ -36,6 +36,10 @@ fi
 zsh -n src/fixit.zsh
 ok "Shell syntax OK"
 
+info "User-facing product naming"
+python3 tests/check_naming.py
+ok "User-facing product naming is consistent"
+
 if ! command -v shellcheck >/dev/null 2>&1; then
   err "shellcheck is required (install it with brew or your package manager)"
   exit 1
