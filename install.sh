@@ -502,6 +502,27 @@ select_provider() {
 }
 
 # ---------- API key (openrouter/openai/anthropic/gemini) ----------
+read_saved_key() {
+  python3 - "$1" "$2" <<'PYKEY'
+import re
+import shlex
+import sys
+
+value = ""
+with open(sys.argv[1]) as source:
+    for line in source:
+        match = re.match(r"^\s*export " + re.escape(sys.argv[2]) + r"=(.*)$", line)
+        if match:
+            try:
+                words = shlex.split(match.group(1), comments=True, posix=True)
+            except ValueError:
+                continue
+            if len(words) == 1:
+                value = words[0]
+sys.stdout.write(value)
+PYKEY
+}
+
 maybe_ask_key() {
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
@@ -523,7 +544,7 @@ maybe_ask_key() {
 
   if ! is_interactive; then
     if [[ -z "$API_KEY" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
-      API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+      API_KEY="$(read_saved_key "$ZSHRC" "$key_var")"
     fi
     if [[ -n "$API_KEY" ]]; then
       ok "$label API key provided"
@@ -538,7 +559,7 @@ maybe_ask_key() {
   [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
   if [[ -z "$hint" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
     hint="(key already in zshrc — Enter keeps it, or paste a new one)"
-    API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+    API_KEY="$(read_saved_key "$ZSHRC" "$key_var")"
   fi
 
   echo ""
