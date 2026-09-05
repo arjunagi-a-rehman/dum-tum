@@ -31,6 +31,9 @@ class SecretReviewTest(unittest.TestCase):
         self.assertNotIn("signed-secret", redacted)
         self.assertIn("https://example.com", redacted)
 
+    def test_compact_quoted_labels(self):
+        self.assertEqual(fixit_ai.redact_secrets('{"token":"private-value"}'), '{"token":"[REDACTED]"}')
+
     def test_script_names(self):
         for value in ("npm run secret:scan", "make token:refresh"):
             self.assertEqual(value, fixit_ai.redact_secrets(value))
