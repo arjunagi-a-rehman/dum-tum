@@ -5,6 +5,7 @@ Usage:
     fixit-ai.py extract KIND    # stdin: provider output -> one command on stdout
     fixit-ai.py secrets-detect  # stdin: text -> exit 0 when a known secret shape is found
     fixit-ai.py secrets-redact  # stdin: text -> redacted text on stdout
+    fixit-ai.py timeout SECS CMD [ARG ...] # supervise a command and its process group
     fixit-ai.py body-openrouter # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body
     fixit-ai.py body-openai     # env FX_SYS, FX_USER, FX_MODEL -> OpenAI JSON body
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
@@ -16,7 +17,9 @@ Usage:
 import json
 import os
 import re
+import signal
 import shutil
+import subprocess
 import sys
 
 HEADS = {
@@ -376,6 +379,99 @@ def cmd_secrets_redact() -> None:
     sys.stdout.write(redact_secrets(sys.stdin.read()))
 
 
+def _kill_process_group(process: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(process.pid, sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _write_process_output(stdout: bytes, stderr: bytes) -> None:
+    if stdout:
+        sys.stdout.buffer.write(stdout)
+        sys.stdout.buffer.flush()
+    if stderr:
+        sys.stderr.buffer.write(stderr)
+        sys.stderr.buffer.flush()
+
+
+def run_with_timeout(seconds: float, command: list) -> int:
+    child_stdin = subprocess.DEVNULL if sys.stdin.isatty() else sys.stdin.buffer
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=child_stdin,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        sys.stderr.write(f"{command[0]}: command not found\n")
+        return 127
+    except PermissionError:
+        sys.stderr.write(f"{command[0]}: permission denied\n")
+        return 126
+
+    timed_out = False
+    interrupted = 0
+    previous_handlers = {}
+
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt(signum)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, interrupt)
+    try:
+        stdout, stderr = process.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_process_group(process, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(process, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        else:
+            _kill_process_group(process, signal.SIGKILL)
+
+    except KeyboardInterrupt as exc:
+        interrupted = exc.args[0] if exc.args else signal.SIGINT
+        for signum in previous_handlers:
+            signal.signal(signum, signal.SIG_IGN)
+        _kill_process_group(process, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(process, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        _kill_process_group(process, signal.SIGKILL)
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
+    _write_process_output(stdout, stderr)
+    if interrupted:
+        return 128 + interrupted
+    if timed_out:
+        return 124
+    return process.returncode if process.returncode >= 0 else 128 - process.returncode
+
+
+def cmd_timeout(args: list) -> int:
+    if len(args) < 2:
+        sys.stderr.write("usage: fixit-ai.py timeout SECS CMD [ARG ...]\n")
+        return 2
+    try:
+        seconds = float(args[0])
+    except ValueError:
+        sys.stderr.write(f"invalid timeout: {args[0]}\n")
+        return 2
+    if seconds < 0:
+        sys.stderr.write(f"invalid timeout: {args[0]}\n")
+        return 2
+    return run_with_timeout(seconds, args[1:])
+
+
 def _chat_body(token_field: str) -> dict:
     return {
         "model": os.environ["FX_MODEL"],
@@ -471,6 +567,8 @@ def main() -> None:
         cmd_secrets_detect()
     elif mode == "secrets-redact":
         cmd_secrets_redact()
+    elif mode == "timeout":
+        raise SystemExit(cmd_timeout(sys.argv[2:]))
     elif mode in ("body", "body-openrouter"):
         cmd_body_openrouter()
     elif mode == "body-openai":

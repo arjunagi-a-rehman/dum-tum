@@ -241,7 +241,7 @@ _fx_shell_name() {
 }
 
 _fx_antigravity_ready() {
-  command -v agy >/dev/null 2>&1 || return 1
+  _fx_provider_executable agy >/dev/null 2>&1 || return 1
   [[ "${_FX_ANTIGRAVITY_READY:-}" == "1" ]] && return 0
   if _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy -p /usage --output-format text >/dev/null; then
     _FX_ANTIGRAVITY_READY=1
@@ -250,15 +250,23 @@ _fx_antigravity_ready() {
   return 1
 }
 
+_fx_provider_executable() {
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    whence -p "$1"
+  else
+    type -P "$1"
+  fi
+}
+
 _fx_ai_ready() {
   case "${FX_PROVIDER:-openrouter}" in
     openrouter) [[ -n "${OPENROUTER_API_KEY:-}" ]] ;;
     openai)     [[ -n "${OPENAI_API_KEY:-}" ]] ;;
     anthropic)  [[ -n "${ANTHROPIC_API_KEY:-}" ]] ;;
     gemini)     [[ -n "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]] ;;
-    opencode)   command -v opencode >/dev/null 2>&1 ;;
-    claude)     command -v claude >/dev/null 2>&1 ;;
-    codex)      command -v codex >/dev/null 2>&1 ;;
+    opencode)   _fx_provider_executable opencode >/dev/null 2>&1 ;;
+    claude)     _fx_provider_executable claude >/dev/null 2>&1 ;;
+    codex)      _fx_provider_executable codex >/dev/null 2>&1 ;;
     antigravity) _fx_antigravity_ready ;;
     none|off|local|"") return 1 ;;
     *) return 1 ;;
@@ -340,41 +348,12 @@ _fx_ai_gemini() {  # $* = intent
     "x-goog-api-key: $key" | _fx_ai_extract gemini
 }
 
-# Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
 _fx_timeout() {  # $1=seconds, $2...=cmd
   local secs="$1"; shift
-  local tmpout tmpin="" rc=0
-  tmpout="$(mktemp)"
-  if [[ ! -t 0 ]]; then
-    tmpin="$(mktemp)"
-    cat >"$tmpin"
-  fi
-  if [[ -n "$tmpin" ]]; then
-    "$@" <"$tmpin" >"$tmpout" 2>/dev/null &
-  else
-    "$@" </dev/null >"$tmpout" 2>/dev/null &
-  fi
-  local pid=$!
-  local waited=0
-  while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= secs )); then
-      kill "$pid" 2>/dev/null
-      sleep 1
-      kill -9 "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      rc=124
-      break
-    fi
-    sleep 1
-    (( waited += 1 ))
-  done
-  if (( rc == 0 )); then
-    wait "$pid" 2>/dev/null || rc=$?
-  fi
-  cat "$tmpout"
-  rm -f "$tmpout"
-  [[ -n "$tmpin" ]] && rm -f "$tmpin"
-  return $rc
+  local executable
+  executable="$(_fx_provider_executable "$1")" || return 127
+  shift
+  python3 "$_FX_AI_PY" timeout "$secs" "$executable" "$@"
 }
 
 _fx_ai_opencode() {  # $* = intent
@@ -409,7 +388,7 @@ _fx_ai_codex() {  # $* = intent
   else
     # fallback: capture stdout if -o failed / older CLI
     _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract plain
+      "${margs[@]}" -- "$prompt" </dev/null | _fx_ai_extract plain
   fi
   rm -f "$out"
 }
@@ -469,7 +448,7 @@ _fx_ai_resolve() {   # called with the full original line
         printf '\033[31m? codex not found on PATH\033[0m\n' >&2
         ;;
       antigravity)
-        if command -v agy >/dev/null 2>&1; then
+        if _fx_provider_executable agy >/dev/null 2>&1; then
           printf '\033[31m? agy authentication check failed; run agy to sign in and retry\033[0m\n' >&2
         else
           printf '\033[31m? agy not found on PATH\033[0m\n' >&2
