@@ -9,15 +9,25 @@
 #   ./install.sh --uninstall
 set -euo pipefail
 
-REPO_RAW="${FIXIT_RAW:-https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main}"
+DEFAULT_REPO_RAW="https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main"
+REPO_RAW="${FIXIT_RAW:-$DEFAULT_REPO_RAW}"
+REPO_COMMIT_API="https://api.github.com/repos/arjunagi-a-rehman/dum-tum/commits/main"
 INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 BASHRC="$HOME/.bashrc"
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
 
-SELF="${BASH_SOURCE[0]:-$0}"
-SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || true)"
+INSTALLER_SOURCE="${BASH_SOURCE[0]:-}"
+SELF_DIR=""
+case "$INSTALLER_SOURCE" in
+  ""|/dev/*|/proc/*) ;;
+  *)
+    if [[ -f "$INSTALLER_SOURCE" ]]; then
+      SELF_DIR="$(cd "$(dirname "$INSTALLER_SOURCE")" 2>/dev/null && pwd || true)"
+    fi
+    ;;
+esac
 
 # Values from CLI flags only (env is a non-interactive fallback — does not skip menus)
 API_KEY=""
@@ -252,18 +262,42 @@ install_deps() {
   ok "Dependencies installed"
 }
 
+resolve_runtime_raw() {
+  RUNTIME_RAW="$REPO_RAW"
+  [[ -z "${FIXIT_RAW+x}" ]] || return 0
+  local response sha
+  if ! response="$(curl -fsSL "$REPO_COMMIT_API")"; then
+    err "Could not resolve the current dum-tum revision."
+    return 1
+  fi
+  if ! sha="$(printf '%s' "$response" | python3 -c 'import json, re, sys; value = json.load(sys.stdin).get("sha", ""); sys.stdout.write(value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) else "")')" || [[ -z "$sha" ]]; then
+    err "GitHub returned an invalid dum-tum revision."
+    return 1
+  fi
+  RUNTIME_RAW="https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/$sha"
+  ok "Pinned runtime source: $sha"
+}
+
 install_script() {
-  mkdir -p "$INSTALL_DIR"
-  local f
-  if [[ -n "$SELF_DIR" && -f "$SELF_DIR/src/fixit.zsh" && -f "$SELF_DIR/src/fixit-common.sh" ]]; then
+  local f use_local=0
+  if [[ -n "$SELF_DIR" ]]; then
+    use_local=1
+    for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
+      [[ -f "$SELF_DIR/src/$f" ]] || use_local=0
+    done
+  fi
+  if [[ "$use_local" -eq 1 ]]; then
+    mkdir -p "$INSTALL_DIR"
     info "Using local scripts from $SELF_DIR/src"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      [[ -f "$SELF_DIR/src/$f" ]] && cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
+      cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
     done
   else
+    resolve_runtime_raw
+    mkdir -p "$INSTALL_DIR"
     info "Downloading scripts from GitHub…"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      curl -fsSL "$REPO_RAW/src/$f" -o "$INSTALL_DIR/$f"
+      curl -fsSL "$RUNTIME_RAW/src/$f" -o "$INSTALL_DIR/$f"
     done
   fi
   chmod 644 "$INSTALL_DIR"/fixit-common.sh "$INSTALL_DIR"/fixit.zsh "$INSTALL_DIR"/fixit.bash "$INSTALL_DIR"/fixit-ai.py
