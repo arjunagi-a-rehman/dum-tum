@@ -761,7 +761,7 @@ validate_staged_runtime() {
       return 1
     fi
   done
-  bash -n "$stage/fixit-common.sh" "$stage/fixit.bash" || {
+  bash -n "$stage/fixit-common.sh" && bash -n "$stage/fixit.bash" || {
     err "Invalid shell syntax in staged Bash runtime"
     return 1
   }
@@ -896,6 +896,12 @@ stage_runtime() {
   parent="$(dirname "$INSTALL_DIR")"
   mkdir -p "$parent"
   TX_STAGE="$(mktemp -d "$parent/.dum-tum-install.XXXXXX")" || return 1
+  if [[ -d "$INSTALL_DIR" ]]; then
+    cp -pR "$INSTALL_DIR/." "$TX_STAGE/" || return 1
+    for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py "$INSTALL_SENTINEL"; do
+      rm -f "$TX_STAGE/$f" || return 1
+    done
+  fi
   if [[ -n "$SELF_DIR" ]]; then
     use_local=1
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
