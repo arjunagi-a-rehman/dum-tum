@@ -17,6 +17,13 @@ INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 BASHRC="$HOME/.bashrc"
 BASH_PROFILE="$HOME/.bash_profile"
+for login_file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+  if [[ -e "$login_file" || -L "$login_file" ]]; then
+    BASH_PROFILE="$login_file"
+    break
+  fi
+done
+unset login_file
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
 BASH_PROFILE_MARKER_BEGIN="# >>> dum-tum bashrc loader >>>"
@@ -265,14 +272,18 @@ validate_marked_block() {
     err "Refusing to update non-file rc path: $rc_file"
     return 1
   fi
+  if [[ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_nlink)' "$target")" -gt 1 ]]; then
+    err "Refusing to replace hard-linked rc file: $rc_file"
+    return 1
+  fi
   if ! awk -v begin="$begin" -v end="$end" '
-    index($0, begin) {
+    $0 == begin {
       if ($0 != begin || state != 0) bad=1
       begins++
       state=1
       next
     }
-    index($0, end) {
+    $0 == end {
       if ($0 != end || state != 1) bad=1
       ends++
       state=2
@@ -294,6 +305,11 @@ validate_managed_block() {
 }
 
 preflight_rc_updates() {
+  if [[ "$DO_ZSH" -eq 1 && "$DO_BASH" -eq 1 ]] &&
+     [[ "$(resolve_rc_file "$ZSHRC")" == "$(resolve_rc_file "$BASHRC")" ]]; then
+    err "Bash and zsh rc paths must resolve to distinct files"
+    return 1
+  fi
   [[ "$DO_ZSH" -eq 0 ]] || validate_managed_block "$ZSHRC" || return 1
   [[ "$DO_BASH" -eq 0 ]] || validate_managed_block "$BASHRC" || return 1
   if [[ "$OS" == Darwin && "$DO_BASH" -eq 1 ]]; then
@@ -403,6 +419,20 @@ load_existing_config() {
     info "Keeping existing FX_VARIANT from $authoritative_rc"
   fi
   key_var="$(key_var_for_provider "${requested_provider:-$PROVIDER}")"
+  if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
+    API_KEY=""
+    KEY_FROM_ENV=0
+    KEY_ENV_VAR=""
+    if [[ -n "$key_var" && -n "${!key_var:-}" ]]; then
+      API_KEY="${!key_var}"
+      KEY_ENV_VAR="$key_var"
+      KEY_FROM_ENV=1
+    elif [[ "$key_var" == GEMINI_API_KEY && -n "${GOOGLE_API_KEY:-}" ]]; then
+      API_KEY="$GOOGLE_API_KEY"
+      KEY_ENV_VAR=GOOGLE_API_KEY
+      KEY_FROM_ENV=1
+    fi
+  fi
   if [[ -n "$authoritative_rc" && -n "$key_var" && "$KEY_FROM_CLI" -eq 0 && "$KEY_FROM_ENV" -eq 0 && -z "$API_KEY" ]] && \
      candidate="$(read_managed_value "$authoritative_rc" "$key_var")"; then
     API_KEY="$candidate"
@@ -458,6 +488,13 @@ target_contains_path() {
   [[ "$protected" == "$target" || "$protected" == "$target/"* ]]
 }
 
+normalize_install_path() {
+  while [[ "$INSTALL_DIR" != / && ( "$INSTALL_DIR" == */ || "$INSTALL_DIR" == */. ) ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+    INSTALL_DIR="${INSTALL_DIR%/.}"
+  done
+}
+
 canonical_candidate_path() {
   local candidate="$1" existing component suffix="" combined rest normalized="/"
   while [[ "$candidate" != / && "$candidate" == */ ]]; do
@@ -498,6 +535,7 @@ canonical_candidate_path() {
 }
 
 validate_uninstall_target() {
+  normalize_install_path
   local target home_path pwd_path self_path="" protected
   UNINSTALL_TARGET=""
   if [[ "$FIXIT_HOME_WAS_SET" == x && -z "${FIXIT_HOME:-}" ]]; then
@@ -544,6 +582,7 @@ validate_uninstall_target() {
 
 validate_install_target() {
   local target home_path pwd_path self_path="" protected
+  normalize_install_path
   [[ ! -L "$INSTALL_DIR" ]] || {
     err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
     return 1
@@ -1090,6 +1129,27 @@ select_provider() {
 }
 
 # ---------- API key (openrouter/openai/anthropic/gemini) ----------
+read_saved_key() {
+  python3 - "$1" "$2" <<'PYKEY'
+import re
+import shlex
+import sys
+
+value = ""
+with open(sys.argv[1]) as source:
+    for line in source:
+        match = re.match(r"^\s*export " + re.escape(sys.argv[2]) + r"=(.*)$", line)
+        if match:
+            try:
+                words = shlex.split(match.group(1), comments=True, posix=True)
+            except ValueError:
+                continue
+            if len(words) == 1:
+                value = words[0]
+sys.stdout.write(value)
+PYKEY
+}
+
 maybe_ask_key() {
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
@@ -1724,6 +1784,12 @@ with open(profile, encoding="utf-8", errors="surrogateescape") as handle:
             words = list(lexer)
         except ValueError:
             continue
+        if "&&" in words:
+            split = words.index("&&")
+            condition = words[:split]
+            if len(condition) != 4 or condition[0] != "[" or condition[1] not in ("-f", "-r") or condition[3] != "]" or sourced_path(condition[2]) != bashrc_target:
+                continue
+            words = words[split + 1:]
         if len(words) != 2 or words[0] not in ("source", "."):
             continue
         if sourced_path(words[1]) == bashrc_target:
