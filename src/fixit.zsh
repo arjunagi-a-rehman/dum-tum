@@ -52,9 +52,16 @@ _fx_accept_line() {
   zle "$_FX_ZSH_SAVED_WIDGET"
 }
 
+if [[ "${_FX_ZSH_CNF_INSTALLED:-0}" != 1 ]]; then
+  _FX_ZSH_PREV_CNF="${functions[command_not_found_handler]-}"
+  _FX_ZSH_CNF_INSTALLED=1
+fi
+
 command_not_found_handler() {
   _fx_handle_not_found "$@"
 }
+
+_FX_ZSH_OWN_CNF="${functions[command_not_found_handler]}"
 
 _fx_preexec() { _FX_LAST="$1"; _FX_FIXED=0 }
 _fx_precmd() {
@@ -68,6 +75,11 @@ _fx_precmd() {
 
 dum_tum_unload() {
   [[ "${_FX_ZSH_LOADED:-0}" == 1 ]] || return 0
+  if [[ "${functions[command_not_found_handler]-}" == "$_FX_ZSH_OWN_CNF" ]]; then
+    unfunction command_not_found_handler
+    [[ -z "$_FX_ZSH_PREV_CNF" ]] || functions[command_not_found_handler]="$_FX_ZSH_PREV_CNF"
+  fi
+  _FX_ZSH_CNF_INSTALLED=0
   autoload -Uz add-zsh-hook
   add-zsh-hook -d preexec _fx_preexec 2>/dev/null
   add-zsh-hook -d precmd _fx_precmd 2>/dev/null

@@ -7,10 +7,17 @@ _FX_BASH_ADAPTER="$_fx_dir/fixit.bash"
 [[ -f "$_fx_dir/fixit-common.sh" ]] && source "$_fx_dir/fixit-common.sh"
 unset _fx_dir
 
+if [[ "${_FX_BASH_CNF_INSTALLED:-0}" != 1 ]]; then
+  _FX_BASH_PREV_CNF="$(declare -f command_not_found_handle)"
+  _FX_BASH_CNF_INSTALLED=1
+fi
+
 command_not_found_handle() {
   _fx_handle_not_found "$@"
   return $?
 }
+
+_FX_BASH_OWN_CNF="$(declare -f command_not_found_handle)"
 
 _fx_preexec() { _FX_LAST="$1"; _FX_FIXED=0; }
 
@@ -35,35 +42,35 @@ _fx_bash_capture_binding() {
       _FX_BASH_CAPTURE_VALUE="${line#*: }"
       return
     fi
-  done < <(bind -X 2>/dev/null)
+  done < <(bind -m "$_FX_BASH_KEYMAP" -X 2>/dev/null)
   while IFS= read -r line; do
     if [[ "${line%%: *}" == "\"$key\"" ]]; then
       _FX_BASH_CAPTURE_TYPE=macro
       _FX_BASH_CAPTURE_VALUE="${line#*: }"
       return
     fi
-  done < <(bind -s 2>/dev/null)
+  done < <(bind -m "$_FX_BASH_KEYMAP" -s 2>/dev/null)
   while IFS= read -r line; do
     if [[ "${line%%: *}" == "\"$key\"" ]]; then
       _FX_BASH_CAPTURE_TYPE=function
       _FX_BASH_CAPTURE_VALUE="${line#*: }"
       return
     fi
-  done < <(bind -p 2>/dev/null)
+  done < <(bind -m "$_FX_BASH_KEYMAP" -p 2>/dev/null)
 }
 
 _fx_bash_apply_binding() {
   local key="$1" type="$2" value="$3"
-  bind -r "$key" 2>/dev/null
+  bind -m "$_FX_BASH_KEYMAP" -r "$key" 2>/dev/null
   case "$type" in
-    shell) bind -x "\"$key\": $value" 2>/dev/null ;;
-    macro|function) bind "\"$key\": $value" 2>/dev/null ;;
+    shell) bind -m "$_FX_BASH_KEYMAP" -x "\"$key\": $value" 2>/dev/null ;;
+    macro|function) bind -m "$_FX_BASH_KEYMAP" "\"$key\": $value" 2>/dev/null ;;
   esac
 }
 
 _fx_bash_install_enter_fallback() {
   if [[ "${_FX_BASH_BIND_TYPES[0]}" == none ]]; then
-    bind '"\C-xfa": accept-line' 2>/dev/null
+    bind -m "$_FX_BASH_KEYMAP" '"\C-xfa": accept-line' 2>/dev/null
   else
     _fx_bash_apply_binding '\C-xfa' "${_FX_BASH_BIND_TYPES[0]}" "${_FX_BASH_BIND_VALUES[0]}"
   fi
@@ -115,6 +122,11 @@ _fx_bash_restore_prompt_command() {
 
 _fx_bash_unload_state() {
   [[ "${_FX_BASH_LOADED:-0}" == 1 ]] || return 0
+  if [[ "$(declare -f command_not_found_handle)" == "$_FX_BASH_OWN_CNF" ]]; then
+    unset -f command_not_found_handle
+    [[ -z "$_FX_BASH_PREV_CNF" ]] || eval "$_FX_BASH_PREV_CNF"
+  fi
+  _FX_BASH_CNF_INSTALLED=0
   _fx_bash_restore_prompt_command
   if (( ${BASH_VERSINFO[0]} >= 4 )); then
     local i
@@ -144,12 +156,22 @@ dum_tum_reload() {
 if [[ $- == *i* ]]; then
   _fx_prompt_hook() {
     local rc=$?
+    if [[ "${_FX_BASH_READLINE_CAPTURED:-0}" != 1 ]]; then
+      local last_history
+      last_history="$(HISTTIMEFORMAT= builtin history 1)"
+      last_history="${last_history#"${last_history%%[![:space:]]*}"}"
+      last_history="${last_history#*[[:space:]]}"
+      last_history="${last_history#"${last_history%%[![:space:]]*}"}"
+      [[ -z "$last_history" ]] || _fx_preexec "$last_history"
+    fi
+    _FX_BASH_READLINE_CAPTURED=0
     _fx_precmd "$rc"
     return "$rc"
   }
 
   if (( ${BASH_VERSINFO[0]} >= 4 )); then
     _fx_accept_line() {
+      _FX_BASH_READLINE_CAPTURED=1
       _fx_preexec "$READLINE_LINE"
       if _fx_is_english_line "$READLINE_LINE"; then
         local full="$READLINE_LINE"
@@ -165,7 +187,7 @@ if [[ $- == *i* ]]; then
           READLINE_LINE="$_FX_READLINE_CMD"
           READLINE_POINT=${#READLINE_LINE}
           _FX_LAST=""
-          bind '"\C-xfa": "\C-xfr"' 2>/dev/null
+          bind -m "$_FX_BASH_KEYMAP" '"\C-xfa": "\C-xfr"' 2>/dev/null
         else
           _FX_LAST=""
         fi
@@ -216,6 +238,8 @@ if [[ $- == *i* ]]; then
     fi
 
     if (( ${BASH_VERSINFO[0]} >= 4 )); then
+      _FX_BASH_KEYMAP="$(bind -v 2>/dev/null | sed -n 's/^set keymap //p')"
+      _FX_BASH_KEYMAP="${_FX_BASH_KEYMAP:-emacs-standard}"
       _FX_BASH_BIND_KEYS=('\C-m' '\C-xfx' '\C-xfr' '\C-xfa')
       _FX_BASH_BIND_TYPES=()
       _FX_BASH_BIND_VALUES=()
@@ -225,10 +249,10 @@ if [[ $- == *i* ]]; then
         _FX_BASH_BIND_VALUES+=("$_FX_BASH_CAPTURE_VALUE")
       done
       unset _fx_bind_key _FX_BASH_CAPTURE_TYPE _FX_BASH_CAPTURE_VALUE
-      bind -x '"\C-xfx": _fx_accept_line' 2>/dev/null
-      bind -x '"\C-xfr": _fx_resume_edit' 2>/dev/null
+      bind -m "$_FX_BASH_KEYMAP" -x '"\C-xfx": _fx_accept_line' 2>/dev/null
+      bind -m "$_FX_BASH_KEYMAP" -x '"\C-xfr": _fx_resume_edit' 2>/dev/null
       _fx_bash_install_enter_fallback
-      bind '"\C-m": "\C-xfx\C-xfa"' 2>/dev/null
+      bind -m "$_FX_BASH_KEYMAP" '"\C-m": "\C-xfx\C-xfa"' 2>/dev/null
       _FX_BASH_OWN_BIND_TYPES=()
       _FX_BASH_OWN_BIND_VALUES=()
       for _fx_bind_key in "${_FX_BASH_BIND_KEYS[@]}"; do
