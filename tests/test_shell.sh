@@ -325,7 +325,6 @@ case "$out" in
   *) bad "sys prompt mentions DANGER prefix" ;;
 esac
 
-# ---------- nounset-safe adapter state ----------
 out="$(bash -uc 'source "$1"; fix' bash "$ROOT/src/fixit.bash")"
 check_eq "bash nounset fix before failure" "nothing failed recently" "$out"
 
