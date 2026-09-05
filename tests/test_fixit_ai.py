@@ -24,6 +24,13 @@ class SecretReviewTest(unittest.TestCase):
             value = 'curl -H "Authorization: ' + scheme + ' Credential=private, Signature=signed-secret"'
             self.assertNotIn("signed-secret", fixit_ai.redact_secrets(value))
 
+    def test_digest_with_quoted_parameters(self):
+        value = "curl -H 'Authorization: Digest username=\"user\", nonce=\"private-nonce\", response=\"signed-secret\"' https://example.com"
+        redacted = fixit_ai.redact_secrets(value)
+        self.assertNotIn("private-nonce", redacted)
+        self.assertNotIn("signed-secret", redacted)
+        self.assertIn("https://example.com", redacted)
+
     def test_script_names(self):
         for value in ("npm run secret:scan", "make token:refresh"):
             self.assertEqual(value, fixit_ai.redact_secrets(value))
