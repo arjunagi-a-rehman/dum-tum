@@ -1,4 +1,6 @@
 import os
+import signal
+import sys
 import shlex
 import shutil
 import subprocess
@@ -14,6 +16,31 @@ SHELLS = [path for name in ("bash", "zsh") if (path := shutil.which(name))]
 
 
 class TimeoutTests(unittest.TestCase):
+    def test_interruption_cleans_up_provider(self):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(signal=sig), tempfile.TemporaryDirectory() as directory:
+                pidfile = Path(directory) / "pid"
+                child = "import os,time,pathlib; pathlib.Path(" + repr(str(pidfile)) + ").write_text(str(os.getpid())); time.sleep(60)"
+                process = subprocess.Popen([sys.executable, str(ROOT / "src/fixit-ai.py"), "timeout", "30", sys.executable, "-c", child], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    deadline = time.monotonic() + 5
+                    while not pidfile.exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(pidfile.exists())
+                    process.send_signal(sig)
+                    process.communicate(timeout=5)
+                    self.assertNotEqual(process.returncode, 0)
+                    self.assertFalse(self.process_exists(int(pidfile.read_text())))
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+
+    def test_function_only_provider_is_not_ready(self):
+        for shell in SHELLS:
+            result = self.invoke(shell, "opencode() { :; }; PATH=/usr/bin:/bin; FX_PROVIDER=opencode; _fx_ai_ready")
+            self.assertNotEqual(result.returncode, 0)
+
     def invoke(self, shell, command, input_text=None, timeout=8):
         script = f"source {shlex.quote(str(COMMON))}; {command}"
         return subprocess.run(
