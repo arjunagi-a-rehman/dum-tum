@@ -322,6 +322,36 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertNotIn("must-not-run", output)
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_bash_ctrl_j_records_actual_failure(self):
+        shell = shutil.which("bash")
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ShellSession([shell, "--noprofile", "--norc", "-i"], tmp)
+            try:
+                session.command(f"source {shlex.quote(str(ROOT / 'src/fixit.bash'))}; FX_AI_ON_FAIL=0; _fx_fix_failed_line() {{ :; }}")
+                session.command("true")
+                session.send("bash -c 'exit 42'\n")
+                session.read_until_idle(PROMPT)
+                output = session.command("printf 'CAPTURE:%s\\n' \"$_FX_LASTFAIL\"")
+                self.assertIn("CAPTURE:bash -c 'exit 42' (exit 42)", output)
+            finally:
+                session.close()
+
+    def test_unload_restores_command_not_found_handlers(self):
+        for name, handler in (("bash", "command_not_found_handle"), ("zsh", "command_not_found_handler")):
+            shell = shutil.which(name)
+            if not shell:
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                argv = [shell, "--noprofile", "--norc", "-i"] if name == "bash" else [shell, "-f", "-i"]
+                session = ShellSession(argv, tmp)
+                try:
+                    session.command(handler + "() { printf 'ORIGINAL_HANDLER\\n'; }")
+                    session.command(f"source {shlex.quote(str(ROOT / ('src/fixit.' + name)))}")
+                    session.command("dum_tum_unload")
+                    self.assertIn("ORIGINAL_HANDLER", session.command("review_missing_command_xyz"))
+                finally:
+                    session.close()
+
     def test_zsh_hooks_coexist_and_unload_restores_state(self):
         zsh = shutil.which("zsh")
         self.shell = ShellSession([zsh, "-f"], self.tempdir.name)
