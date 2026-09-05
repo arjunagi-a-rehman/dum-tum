@@ -6,6 +6,10 @@ _fx_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 [[ -f "$_fx_dir/fixit-common.sh" ]] && source "$_fx_dir/fixit-common.sh"
 unset _fx_dir
 
+_FX_LAST=${_FX_LAST-}
+_FX_LASTFAIL=${_FX_LASTFAIL-}
+_FX_FIXED=${_FX_FIXED-0}
+
 command_not_found_handle() {
   _fx_handle_not_found "$@"
   return $?

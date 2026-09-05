@@ -6,6 +6,10 @@ _fx_dir="${0:A:h}"
 [[ -f "$_fx_dir/fixit-common.sh" ]] && source "$_fx_dir/fixit-common.sh"
 unset _fx_dir
 
+_FX_LAST=${_FX_LAST-}
+_FX_LASTFAIL=${_FX_LASTFAIL-}
+_FX_FIXED=${_FX_FIXED-0}
+
 # Full-line English detector for the accept-line hook (3+ plain words, no shell syntax).
 _fx_is_english_line() {
   local line="${1#"${1%%[![:space:]]*}"}"  # trim leading
