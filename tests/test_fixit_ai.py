@@ -45,6 +45,16 @@ class TestHeadOf(unittest.TestCase):
 
 
 class TestExtract(unittest.TestCase):
+    def test_outer_quotes_and_literal_argument(self):
+        self.assertEqual(fixit_ai.extract('"ls -la"'), 'ls -la')
+        self.assertEqual(fixit_ai.extract("ls 'file name'"), "ls 'file name'")
+
+    def test_shell_supplied_names(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"FX_COMMAND_NAMES": "my_alias\nmy_function"}):
+            self.assertEqual(fixit_ai.extract("my_alias status"), "my_alias status")
+            self.assertEqual(fixit_ai.extract("my_function argument"), "my_function argument")
+
     def test_simple_command(self):
         self.assertEqual(fixit_ai.extract("ls -la"), "ls -la")
 
