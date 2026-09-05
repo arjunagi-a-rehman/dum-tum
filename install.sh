@@ -615,10 +615,6 @@ validate_install_target() {
       err "Refusing to install into non-empty directory without a valid dum-tum identity: $INSTALL_DIR"
       return 1
     fi
-    if ! install_directory_is_exclusive "$INSTALL_DIR"; then
-      err "Refusing to replace installation directory with unexpected entries: $INSTALL_DIR"
-      return 1
-    fi
   fi
 }
 
