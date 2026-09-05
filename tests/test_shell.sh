@@ -355,16 +355,25 @@ if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 check_eq "_fx_ai_antigravity stdin and isolation" 'ls -la' "$out"
 
 mkdir -p "$TMPD/install-home"
-check_rc "installer rejects unauthenticated antigravity" 1 env \
+rm -f "$TMPD/agy-installer-marker"
+printf '#!/bin/sh\ntouch "$FX_TEST_AGY_INSTALLER_MARKER"\nexit 1\n' > bin/agy
+chmod +x bin/agy
+check_rc "installer skip-ai-test does not authenticate antigravity" 0 env \
   HOME="$TMPD/install-home" \
   FIXIT_HOME="$TMPD/install-target" \
+  FX_TEST_AGY_INSTALLER_MARKER="$TMPD/agy-installer-marker" \
   PATH="$TMPD/bin:$PATH" \
   SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider antigravity --shell zsh
-if [[ ! -e "$TMPD/install-home/.zshrc" ]]; then
-  ok "installer does not write config for unauthenticated antigravity"
+if [[ ! -e "$TMPD/agy-installer-marker" ]]; then
+  ok "installer skip-ai-test leaves antigravity uninvoked"
 else
-  bad "installer does not write config for unauthenticated antigravity"
+  bad "installer skip-ai-test leaves antigravity uninvoked"
+fi
+if grep -q 'export FX_PROVIDER="antigravity"' "$TMPD/install-home/.zshrc" 2>/dev/null; then
+  ok "installer skip-ai-test writes antigravity config"
+else
+  bad "installer skip-ai-test writes antigravity config"
 fi
 (
   FX_PROVIDER=off
