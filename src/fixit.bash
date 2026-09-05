@@ -158,7 +158,7 @@ if [[ $- == *i* ]]; then
     local rc=$?
     if [[ "${_FX_BASH_READLINE_CAPTURED:-0}" != 1 ]]; then
       local last_history
-      last_history="$(HISTTIMEFORMAT= builtin history 1)"
+      last_history="$(HISTTIMEFORMAT='' builtin history 1)"
       last_history="${last_history#"${last_history%%[![:space:]]*}"}"
       last_history="${last_history#*[[:space:]]}"
       last_history="${last_history#"${last_history%%[![:space:]]*}"}"
