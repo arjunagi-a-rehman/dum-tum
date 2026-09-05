@@ -31,6 +31,11 @@ check_rc() { # $1=desc $2=expected rc $3...=cmd
   if [[ "$got" == "$want" ]]; then ok "$desc"; else bad "$desc (expected rc $want, got $got)"; fi
 }
 
+case "${FX_TEST_HARNESS_MODE:-}" in
+  assertion) (check_eq "forced provider failure" expected actual); exit $? ;;
+  abort) (set -u; unset FX_TEST_UNSET; printf '%s' "$FX_TEST_UNSET"); exit $? ;;
+esac
+
 cd "$TMPD"
 
 # ---------- _fx_best (edit distance over stdin candidates) ----------
@@ -149,62 +154,86 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
     check_rc "forced provider assertion failure" 0 false
   fi
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=openrouter
   unset OPENROUTER_API_KEY
   check_rc "_fx_ai_ready openrouter no key" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=openrouter
   OPENROUTER_API_KEY=dummy
   check_rc "_fx_ai_ready openrouter with key" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=bogus
   check_rc "_fx_ai_ready unknown provider" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=openai
   unset OPENAI_API_KEY
   check_rc "_fx_ai_ready openai no key" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=openai
   OPENAI_API_KEY=dummy
   check_rc "_fx_ai_ready openai with key" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=anthropic
   unset ANTHROPIC_API_KEY
   check_rc "_fx_ai_ready anthropic no key" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=anthropic
   ANTHROPIC_API_KEY=dummy
   check_rc "_fx_ai_ready anthropic with key" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=gemini
   unset GEMINI_API_KEY GOOGLE_API_KEY
   check_rc "_fx_ai_ready gemini no key" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=gemini
   GEMINI_API_KEY=dummy
   check_rc "_fx_ai_ready gemini with key" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=gemini
   unset GEMINI_API_KEY
   GOOGLE_API_KEY=dummy
   check_rc "_fx_ai_ready gemini with google key" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=opencode
   mkdir -p emptybin
   PATH="$TMPD/emptybin:/usr/bin:/bin"
   check_rc "_fx_ai_ready opencode missing binary" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=opencode
   mkdir -p bin
@@ -213,12 +242,16 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   PATH="$TMPD/bin:$PATH"
   check_rc "_fx_ai_ready opencode on PATH" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=claude
   mkdir -p emptybin
   PATH="$TMPD/emptybin:/usr/bin:/bin"
   check_rc "_fx_ai_ready claude missing binary" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=claude
   mkdir -p bin
@@ -227,12 +260,16 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   PATH="$TMPD/bin:$PATH"
   check_rc "_fx_ai_ready claude on PATH" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
   mkdir -p emptybin
   PATH="$TMPD/emptybin:/usr/bin:/bin"
   check_rc "_fx_ai_ready antigravity missing binary" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
   mkdir -p bin
@@ -241,6 +278,8 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   PATH="$TMPD/bin:$PATH"
   check_rc "_fx_ai_ready antigravity authenticated" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
   mkdir -p bin
@@ -249,6 +288,8 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   PATH="$TMPD/bin:$PATH"
   check_rc "_fx_ai_ready antigravity unauthenticated" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
   mkdir -p bin
@@ -266,6 +307,8 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   check_rc "_fx_ai_ready antigravity initial auth failure" 1 _fx_ai_ready
   check_rc "_fx_ai_ready antigravity retries after auth failure" 0 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
   mkdir -p bin
@@ -277,6 +320,8 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   check_eq "_fx_ai_resolve antigravity auth error" \
     '? agy authentication check failed; run agy to sign in and retry' "$out"
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
   mkdir -p emptybin
@@ -285,6 +330,8 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
   out="$(_fx_ai_resolve test 2>&1 | _fx_strip_ctrl)"
   check_eq "_fx_ai_resolve antigravity missing binary error" '? agy not found on PATH' "$out"
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 out=$(
   printf '%s\n' '#!/usr/bin/env bash' \
     '[[ "$PWD" != "$FX_TEST_ORIGINAL_CWD" ]] || exit 1' \
@@ -303,6 +350,8 @@ out=$(
   FX_VARIANT=high
   _fx_ai_antigravity list files
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 check_eq "_fx_ai_antigravity stdin and isolation" 'ls -la' "$out"
 
 mkdir -p "$TMPD/install-home"
@@ -330,6 +379,8 @@ fi
   FX_PROVIDER=off
   check_rc "_fx_ai_ready off alias" 1 _fx_ai_ready
 )
+rc=$?
+if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 
 # ---------- _fx_timeout ----------
 check_rc "_fx_timeout fast command" 0 _fx_timeout 5 true
