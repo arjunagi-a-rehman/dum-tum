@@ -366,7 +366,7 @@ _fx_ai_claude() {  # $* = intent
 _fx_codex_output_file_supported() {
   if [[ -z "${_FX_CODEX_OUTPUT_FILE_OPTION+x}" ]]; then
     local help
-    help="$(codex exec --help 2>&1)"
+    help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" codex exec --help 2>&1)" || help=""
     if [[ "$help" == *"--output-last-message"* ]]; then
       _FX_CODEX_OUTPUT_FILE_OPTION=--output-last-message
     elif [[ "$help" == *"-o,"* || "$help" == *"-o "* ]]; then
