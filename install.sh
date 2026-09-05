@@ -175,6 +175,116 @@ shell_quote() {
   printf "'%s'" "$value"
 }
 
+resolve_rc_file() {
+  local path="$1" link dir hops=0
+  case "$path" in
+    /*) ;;
+    *) path="$PWD/$path" ;;
+  esac
+  while [[ -L "$path" ]]; do
+    hops=$((hops+1))
+    if (( hops > 40 )); then
+      err "Too many symlinks while resolving $1"
+      return 1
+    fi
+    link="$(readlink "$path")" || return 1
+    case "$link" in
+      /*) path="$link" ;;
+      *)
+        dir="$(cd -P "$(dirname "$path")" 2>/dev/null && pwd)" || return 1
+        path="$dir/$link"
+        ;;
+    esac
+  done
+  dir="$(cd -P "$(dirname "$path")" 2>/dev/null && pwd)" || {
+    err "Parent directory does not exist for $1"
+    return 1
+  }
+  printf '%s/%s\n' "$dir" "$(basename "$path")"
+}
+
+validate_managed_block() {
+  local rc_file="$1" target
+  target="$(resolve_rc_file "$rc_file")" || return 1
+  [[ -e "$target" ]] || return 0
+  if [[ ! -f "$target" ]]; then
+    err "Refusing to update non-file rc path: $rc_file"
+    return 1
+  fi
+  if [[ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_nlink)' "$target")" -gt 1 ]]; then
+    err "Refusing to replace hard-linked rc file: $rc_file"
+    return 1
+  fi
+  if ! awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
+    $0 == begin {
+      if ($0 != begin || state != 0) bad=1
+      begins++
+      state=1
+      next
+    }
+    $0 == end {
+      if ($0 != end || state != 1) bad=1
+      ends++
+      state=2
+      next
+    }
+    END {
+      if (begins == 0 && ends == 0) exit 0
+      if (!bad && begins == 1 && ends == 1 && state == 2) exit 0
+      exit 1
+    }
+  ' "$target"; then
+    err "Malformed dum-tum block in $rc_file; leaving it unchanged"
+    return 1
+  fi
+}
+
+preflight_rc_updates() {
+  if [[ "$DO_ZSH" -eq 1 && "$DO_BASH" -eq 1 ]] &&
+     [[ "$(resolve_rc_file "$ZSHRC")" == "$(resolve_rc_file "$BASHRC")" ]]; then
+    err "Bash and zsh rc paths must resolve to distinct files"
+    return 1
+  fi
+  [[ "$DO_ZSH" -eq 0 ]] || validate_managed_block "$ZSHRC" || return 1
+  [[ "$DO_BASH" -eq 0 ]] || validate_managed_block "$BASHRC" || return 1
+}
+
+preflight_rc_uninstall() {
+  if [[ -e "$ZSHRC" || -L "$ZSHRC" ]]; then
+    validate_managed_block "$ZSHRC" || return 1
+  fi
+  if [[ -e "$BASHRC" || -L "$BASHRC" ]]; then
+    validate_managed_block "$BASHRC" || return 1
+  fi
+}
+
+rewrite_managed_file() {
+  local source="$1" output="$2" replacement="${3:-}"
+  python3 - "$source" "$output" "$MARKER_BEGIN" "$MARKER_END" "$replacement" <<'PY'
+import pathlib
+import sys
+
+source, output, begin, end, replacement = sys.argv[1:]
+data = pathlib.Path(source).read_bytes()
+begin = begin.encode()
+end = end.encode()
+start = None
+finish = None
+offset = 0
+for line in data.splitlines(keepends=True):
+    body = line[:-1] if line.endswith(b"\n") else line
+    if body == begin:
+        start = offset
+    if body == end:
+        finish = offset + len(line)
+    offset += len(line)
+if start is None or finish is None or finish < start:
+    raise SystemExit(1)
+insert = pathlib.Path(replacement).read_bytes() if replacement else b""
+pathlib.Path(output).write_bytes(data[:start] + insert + data[finish:])
+PY
+}
+
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Darwin) OS_NAME="macOS" ;;
@@ -1012,7 +1122,7 @@ test_ai() {
 # write_rc_block <rc-file> <adapter-file>
 write_rc_block() {
   local rc_file="$1" adapter="$2"
-  local key_line model_line provider_line variant_line
+  local key_line model_line provider_line variant_line stores_api_key=0
   provider_line="export FX_PROVIDER=$(shell_quote "${PROVIDER:-none}")"
 
   if [[ -n "$MODEL" ]]; then
@@ -1037,6 +1147,7 @@ write_rc_block() {
   esac
   if [[ -n "$key_var" && -n "$API_KEY" ]]; then
     key_line="export ${key_var}=$(shell_quote "$API_KEY")"
+    stores_api_key=1
   elif [[ -n "$key_var" ]]; then
     key_line="# export ${key_var}=\"${key_placeholder}\"   # uncomment and add your key"
   else
@@ -1056,43 +1167,70 @@ $MARKER_END
 EOF
 )
 
-  touch "$rc_file"
+  validate_managed_block "$rc_file" || return 1
+  local target dir tmp repl_file mode
+  target="$(resolve_rc_file "$rc_file")" || return 1
+  dir="$(dirname "$target")"
+  tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 1
+  repl_file="$(mktemp "$dir/.dum-tum-block.XXXXXX")" || {
+    rm -f "$tmp"
+    return 1
+  }
+  printf '%s\n' "$block" > "$repl_file" || {
+    rm -f "$tmp" "$repl_file"
+    return 1
+  }
 
-  if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
+  if [[ -f "$target" ]] && grep -qxF "$MARKER_BEGIN" "$target" 2>/dev/null; then
     info "Updating existing fixit block in $rc_file"
-    local tmp repl_file
-    tmp="$(mktemp)"
-    repl_file="$(mktemp)"
-    printf '%s\n' "$block" > "$repl_file"
-    # Replace the marker block; insert replacement via file (no multiline -v)
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$rc_file" > "$tmp"
-    rm -f "$repl_file"
-    if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
-      printf '\n%s\n' "$block" >> "$tmp"
-    fi
-    mv "$tmp" "$rc_file"
+    rewrite_managed_file "$target" "$tmp" "$repl_file" || {
+      rm -f "$tmp" "$repl_file"
+      return 1
+    }
   else
     info "Appending fixit block to $rc_file"
-    printf '\n%s\n' "$block" >> "$rc_file"
+    if [[ -f "$target" ]]; then
+      cat "$target" > "$tmp" || {
+        rm -f "$tmp" "$repl_file"
+        return 1
+      }
+    fi
+    printf '\n%s\n' "$block" >> "$tmp" || {
+      rm -f "$tmp" "$repl_file"
+      return 1
+    }
   fi
+  rm -f "$repl_file"
 
-  # The block can contain an API key — never leave the file
-  # group/world-readable (stock ~/.bashrc from /etc/skel is 0644).
-  if [[ "$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null)" != "600" ]]; then
+  mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
+  if [[ "$stores_api_key" -eq 1 && "$mode" != "600" ]]; then
     warn "$rc_file was readable by other users — tightening to 600 (key inside)"
-    chmod 600 "$rc_file"
   fi
+  if [[ "$stores_api_key" -eq 1 ]]; then
+    chmod 600 "$tmp" || {
+      rm -f "$tmp"
+      return 1
+    }
+  elif [[ -n "$mode" ]]; then
+    chmod "$mode" "$tmp" || {
+      rm -f "$tmp"
+      return 1
+    }
+  fi
+  mv "$tmp" "$target" || {
+    rm -f "$tmp"
+    return 1
+  }
   ok "Configured $rc_file"
 }
 
 write_rc_blocks() {
-  [[ "$DO_ZSH" -eq 1 ]]  && write_rc_block "$ZSHRC" "fixit.zsh"
-  [[ "$DO_BASH" -eq 1 ]] && write_rc_block "$BASHRC" "fixit.bash"
-  return 0
+  if [[ "$DO_ZSH" -eq 1 ]]; then
+    write_rc_block "$ZSHRC" "fixit.zsh" || return 1
+  fi
+  if [[ "$DO_BASH" -eq 1 ]]; then
+    write_rc_block "$BASHRC" "fixit.bash" || return 1
+  fi
 }
 
 ensure_shell_default() {
@@ -1175,51 +1313,49 @@ Docs: https://github.com/arjunagi-a-rehman/dum-tum
 EOF
 }
 
-# leave cleanup block in one rc file so sourcing clears leftover env
 uninstall_rc() {
-  local rc_file="$1" cleanup="$2"
-  touch "$rc_file"
-  local tmp repl_file
-  tmp="$(mktemp)"
-  repl_file="$(mktemp)"
-  printf '%s\n' "$cleanup" > "$repl_file"
-  if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
-      $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
-      $0 == end   { skip=0; next }
-      !skip       { print }
-    ' "$rc_file" > "$tmp"
-    if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
-      printf '\n%s\n' "$cleanup" >> "$tmp"
-    fi
-    mv "$tmp" "$rc_file"
-    ok "Updated $rc_file (removed config; clears FX_* on source)"
-  else
-    printf '\n%s\n' "$cleanup" >> "$rc_file"
-    ok "Added cleanup block to $rc_file (clears FX_* on source)"
-  fi
-  rm -f "$repl_file"
+  local rc_file="$1" target dir tmp mode
+  [[ -e "$rc_file" || -L "$rc_file" ]] || return 1
+  validate_managed_block "$rc_file" || return 2
+  target="$(resolve_rc_file "$rc_file")" || return 2
+  [[ -f "$target" ]] || return 1
+  grep -qxF "$MARKER_BEGIN" "$target" 2>/dev/null || return 1
+  dir="$(dirname "$target")"
+  mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
+  tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 2
+  rewrite_managed_file "$target" "$tmp" || {
+    rm -f "$tmp"
+    return 2
+  }
+  [[ -z "$mode" ]] || chmod "$mode" "$tmp" || {
+    rm -f "$tmp"
+    return 2
+  }
+  mv "$tmp" "$target" || {
+    rm -f "$tmp"
+    return 2
+  }
+  ok "Updated $rc_file (removed dum-tum config)"
 }
 
 uninstall_fixit() {
   info "Uninstalling fixit…"
-  local removed=0
+  local removed=0 rc=0
 
-  # Leave a tiny marker block that unsets exports so `source ~/.zshrc`
-  # clears leftovers in the *current* shell (child process can't unset parent env).
-  # Re-install replaces this block with the real config.
-  local cleanup
-  cleanup=$(cat <<EOF
-$MARKER_BEGIN
-# fixit uninstalled — clear leftover exports when you source this file
-unset FX_PROVIDER FX_MODEL FX_VARIANT OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY 2>/dev/null || true
-$MARKER_END
-EOF
-)
-
-  uninstall_rc "$ZSHRC" "$cleanup"
-  [[ -f "$BASHRC" ]] && uninstall_rc "$BASHRC" "$cleanup"
-  removed=1
+  preflight_rc_uninstall || return 1
+  uninstall_rc "$ZSHRC" || rc=$?
+  case "$rc" in
+    0) removed=1 ;;
+    1) ;;
+    *) return "$rc" ;;
+  esac
+  rc=0
+  uninstall_rc "$BASHRC" || rc=$?
+  case "$rc" in
+    0) removed=1 ;;
+    1) ;;
+    *) return "$rc" ;;
+  esac
 
   if [[ -e "$INSTALL_DIR" ]]; then
     rm -rf "$INSTALL_DIR"
@@ -1234,11 +1370,7 @@ EOF
   else
     ok "fixit uninstalled"
     echo ""
-    echo "Finish cleanup in this shell:"
-    echo "  source $ZSHRC      # zsh"
-    echo "  source $BASHRC     # bash"
-    echo ""
-    echo "That unsets FX_PROVIDER, FX_MODEL, FX_VARIANT, the API key vars and drops the hooks."
+    echo "Restart your shell to drop the loaded hooks."
   fi
 }
 
@@ -1251,6 +1383,7 @@ main() {
 
   info "Installing fixit for ${OS_NAME}…"
   select_shells
+  preflight_rc_updates
   install_deps
   install_script
   detect_ai_clis
