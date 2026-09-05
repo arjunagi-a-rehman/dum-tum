@@ -50,8 +50,8 @@ class TestRepairFailedLine(unittest.TestCase):
         for name in ("document file.txt", "document*.txt", "document'file.txt", 'document$HOME.txt'):
             original = name.replace(" ", "").replace("*", "").replace("'", "").replace("$", "")
             result = fixit_ai.repair_failed_line("cat " + original, ["cat"], candidates=[name])
-            self.assertEqual(shlex.split(result[3]), ["cat", name])
-            self.assertEqual(result[0], "run")
+            self.assertEqual(result[0], "edit")
+            self.assertEqual(shlex.split(result[3]), ["cat", original])
 
     def test_preserves_shell_syntax_around_repaired_span(self):
         raw = 'cat "dcoument.txt" | wc -c > "$OUT" && printf "$KEEP"'

@@ -322,7 +322,7 @@ class InteractiveAdapterTest(unittest.TestCase):
         output += self.shell.read_until_idle(PROMPT)
         self.assertNotIn("must-not-run", output)
 
-    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
     def test_bash_ctrl_j_records_actual_failure(self):
         shell = shutil.which("bash")
         with tempfile.TemporaryDirectory() as tmp:
@@ -334,6 +334,21 @@ class InteractiveAdapterTest(unittest.TestCase):
                 session.read_until_idle(PROMPT)
                 output = session.command("printf 'CAPTURE:%s\\n' \"$_FX_LASTFAIL\"")
                 self.assertIn("CAPTURE:bash -c 'exit 42' (exit 42)", output)
+            finally:
+                session.close()
+
+    def test_bash_unload_restores_original_keymap(self):
+        shell = shutil.which("bash")
+        version = subprocess.check_output([shell, "-c", "echo ${BASH_VERSINFO[0]}"], text=True)
+        if int(version.strip()) < 4:
+            self.skipTest("Readline bindings require Bash 4+")
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ShellSession([shell, "--noprofile", "--norc", "-i"], tmp)
+            try:
+                session.command('before_macros="$(bind -m emacs-standard -s)"; before_functions="$(bind -m emacs-standard -p)"')
+                session.command(f"source {shlex.quote(str(ROOT / 'src/fixit.bash'))}")
+                output = session.command('set -o vi; dum_tum_unload; [[ "$(bind -m emacs-standard -s)" == "$before_macros" && "$(bind -m emacs-standard -p)" == "$before_functions" ]] && printf "KEYMAP_RESTORED\\n"')
+                self.assertIn("KEYMAP_RESTORED\r\n", output)
             finally:
                 session.close()
 
@@ -349,10 +364,11 @@ class InteractiveAdapterTest(unittest.TestCase):
                     session.command(handler + "() { printf 'ORIGINAL_HANDLER\\n'; }")
                     session.command(f"source {shlex.quote(str(ROOT / ('src/fixit.' + name)))}")
                     session.command("dum_tum_unload")
-                    self.assertIn("ORIGINAL_HANDLER", session.command("review_missing_command_xyz"))
+                    self.assertIn("ORIGINAL_HANDLER", session.command(("declare -f " if name == "bash" else "functions ") + handler))
                 finally:
                     session.close()
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_hooks_coexist_and_unload_restores_state(self):
         zsh = shutil.which("zsh")
         self.shell = ShellSession([zsh, "-f"], self.tempdir.name)
