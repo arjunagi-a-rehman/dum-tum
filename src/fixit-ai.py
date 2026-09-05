@@ -45,7 +45,7 @@ _SECRET_VALUE = (
 
 _SECRET_VALUE_PATTERNS = (
     re.compile(
-        r'(?i)(?P<prefix>\b(?:'
+        r'(?i)(?P<prefix>\b(?!TOKEN_COUNT\b)(?:'
         r'(?:API_?KEY|ACCESS_?KEY(?:_ID)?|SECRET(?:_KEY)?|TOKEN|'
         r'PASS(?:WORD|WD)?|CREDENTIALS?)|'
         r'[A-Z_][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASS(?:WORD|WD)?|_CREDENTIALS?)'
