@@ -17,6 +17,13 @@ INSTALL_DIR="${FIXIT_HOME:-$HOME/.local/share/fixit}"
 ZSHRC="${ZDOTDIR:-$HOME}/.zshrc"
 BASHRC="$HOME/.bashrc"
 BASH_PROFILE="$HOME/.bash_profile"
+for login_file in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+  if [[ -e "$login_file" || -L "$login_file" ]]; then
+    BASH_PROFILE="$login_file"
+    break
+  fi
+done
+unset login_file
 MARKER_BEGIN="# >>> fixit.zsh >>>"
 MARKER_END="# <<< fixit.zsh <<<"
 BASH_PROFILE_MARKER_BEGIN="# >>> dum-tum bashrc loader >>>"
@@ -366,6 +373,20 @@ load_existing_config() {
     info "Keeping existing FX_VARIANT from $authoritative_rc"
   fi
   key_var="$(key_var_for_provider "${requested_provider:-$PROVIDER}")"
+  if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
+    API_KEY=""
+    KEY_FROM_ENV=0
+    KEY_ENV_VAR=""
+    if [[ -n "$key_var" && -n "${!key_var:-}" ]]; then
+      API_KEY="${!key_var}"
+      KEY_ENV_VAR="$key_var"
+      KEY_FROM_ENV=1
+    elif [[ "$key_var" == GEMINI_API_KEY && -n "${GOOGLE_API_KEY:-}" ]]; then
+      API_KEY="$GOOGLE_API_KEY"
+      KEY_ENV_VAR=GOOGLE_API_KEY
+      KEY_FROM_ENV=1
+    fi
+  fi
   if [[ -n "$authoritative_rc" && -n "$key_var" && "$KEY_FROM_CLI" -eq 0 && "$KEY_FROM_ENV" -eq 0 && -z "$API_KEY" ]] && \
      candidate="$(read_managed_value "$authoritative_rc" "$key_var")"; then
     API_KEY="$candidate"
@@ -1425,6 +1446,12 @@ with open(profile, encoding="utf-8", errors="surrogateescape") as handle:
             words = list(lexer)
         except ValueError:
             continue
+        if "&&" in words:
+            split = words.index("&&")
+            condition = words[:split]
+            if len(condition) != 4 or condition[0] != "[" or condition[1] not in ("-f", "-r") or condition[3] != "]" or sourced_path(condition[2]) != bashrc_target:
+                continue
+            words = words[split + 1:]
         if len(words) != 2 or words[0] not in ("source", "."):
             continue
         if sourced_path(words[1]) == bashrc_target:
