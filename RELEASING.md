@@ -25,7 +25,7 @@ dum-tum is published in two places from the same repo:
      python -m unittest \
      tests.test_shell_interactive.InteractiveAdapterTest.test_bash_confirmation_flow -v
    ```
-3. Bump `version` in `package.json` (semver).
+3. Create a release branch with `git switch -c chore/release-X.Y.Z`, then bump `version` in `package.json` (semver).
    Review README and SECURITY disclosures if shell behavior, transmitted context, or provider handling changed.
 4. Verify that the version has not already been published, then inspect the exact package contents from the clean audited tree:
    ```bash
@@ -34,13 +34,21 @@ dum-tum is published in two places from the same repo:
    npm pack --dry-run
    ```
    The `npm view` command must report that the version does not exist. Any other error must be investigated rather than treated as an unpublished version. Review the complete `npm pack --dry-run` file list and confirm it comes from the intended `main` commit.
-5. Commit the bump and fast-forward `main` on GitHub:
+5. Commit the bump and open a version-bump PR:
    ```bash
    git add package.json && git commit -m "chore: bump version to X.Y.Z"
-   git push origin main
+   git push -u origin chore/release-X.Y.Z
+   gh pr create --base main --title "chore: bump version to X.Y.Z" --body "Bump the audited release version; full suite and package contents verified."
+   ```
+   Wait for review and required checks, then merge the PR through GitHub. Refresh and reverify the resulting `main` before tagging:
+   ```bash
+   git switch main
+   test -z "$(git status --porcelain)"
    git fetch origin
+   git pull --ff-only origin main
    test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
    ```
+   Run `bash tests/run-tests.sh` and `npm pack --dry-run` again on this merged tree, and verify `package.json` contains the intended version.
 6. Tag the verified `main` commit, check the tag target, and push it:
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z — <short title>"
