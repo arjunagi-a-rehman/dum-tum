@@ -449,5 +449,29 @@ if env HOME="$TMPD/review-partial-home" FIXIT_HOME="$TMPD/review-partial-install
 [[ ! -e "$TMPD/review-partial-install" ]]
 run_local_install "$TMPD/review-partial-home" "$TMPD/review-partial-install" bash >/dev/null
 assert_runtime_matches_repo "$TMPD/review-partial-install"
+mkdir -p "$TMPD/review-shared-home"
+printf 'export REVIEW_KEEP=1\n' > "$TMPD/review-shared-home/shared"
+ln -s shared "$TMPD/review-shared-home/.zshrc"
+ln -s shared "$TMPD/review-shared-home/.bashrc"
+if run_local_install "$TMPD/review-shared-home" "$TMPD/review-shared-install" both >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$TMPD/review-shared-install" ]]
+mkdir -p "$TMPD/review-hard-home"
+printf 'export REVIEW_KEEP=1\n' > "$TMPD/review-hard-home/shared"
+ln "$TMPD/review-hard-home/shared" "$TMPD/review-hard-home/.bashrc"
+if run_local_install "$TMPD/review-hard-home" "$TMPD/review-hard-install" bash >/dev/null 2>&1; then exit 1; fi
+[[ "$TMPD/review-hard-home/shared" -ef "$TMPD/review-hard-home/.bashrc" ]]
+mkdir -p "$TMPD/review-marker-home"
+env HOME="$TMPD/review-marker-home" FIXIT_HOME="$TMPD/review-marker-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --model '# >>> fixit.zsh >>>' --shell bash >/dev/null
+run_local_install "$TMPD/review-marker-home" "$TMPD/review-marker-install" bash >/dev/null
+mkdir -p "$TMPD/review-key-home"
+review_key="abc'def"
+env HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
+  OPENROUTER_API_KEY="$review_key" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
+env -u OPENROUTER_API_KEY HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
+  PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
+zsh -c 'source "$1"; [[ "$OPENROUTER_API_KEY" == "$2" ]]' zsh "$TMPD/review-key-home/.zshrc" "$review_key"
 
 printf 'Installer tests passed\n'
