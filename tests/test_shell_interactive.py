@@ -1,3 +1,4 @@
+import json
 import os
 import pty
 import select
@@ -159,6 +160,64 @@ class InteractiveAdapterTest(unittest.TestCase):
         output = self.shell.command("printf DUM_TUM_PLAIN_COMMAND")
         self.assertIn("DUM_TUM_PLAIN_COMMAND", output)
 
+    def exercise_argv_confirmation(self):
+        executable = Path(self.tempdir.name) / "fxargvprobe"
+        log_path = Path(self.tempdir.name) / "argv.json"
+        semicolon_marker = Path(self.tempdir.name) / "semicolon-injected"
+        substitution_marker = Path(self.tempdir.name) / "substitution-injected"
+        executable.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, sys\n"
+            "with open(os.environ['FX_ARGV_LOG'], 'w', encoding='utf-8') as fh:\n"
+            "    json.dump(sys.argv[1:], fh)\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        self.shell.command(
+            f"PATH='{self.tempdir.name}':$PATH; export PATH; "
+            f"FX_ARGV_LOG='{log_path}'; export FX_ARGV_LOG; "
+            "_fx_all_commands() { printf '%s\\n' fxargvprobe; }"
+        )
+
+        arguments = [
+            "space value",
+            f"literal; touch {semicolon_marker}",
+            f"$(touch {substitution_marker})",
+            "*",
+            "",
+            "single'quote",
+            'double"quote',
+            "back\\slash",
+        ]
+
+        def quote(value):
+            return "'" + value.replace("'", "'\\''") + "'"
+
+        self.shell.send("_fx_handle_not_found fxargvprobx " + " ".join(map(quote, arguments)) + "\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.assertIn("fxargvprobe", output)
+        self.shell.send("\n")
+        output += self.shell.read_until_idle(PROMPT)
+        self.assertTrue(log_path.exists(), output)
+        self.assertEqual(arguments, json.loads(log_path.read_text(encoding="utf-8")))
+        self.assertFalse(semicolon_marker.exists(), output)
+        self.assertFalse(substitution_marker.exists(), output)
+
+        log_path.unlink()
+        self.shell.command(
+            "alias fxargvalias=fxargvprobe; "
+            "_fx_all_commands() { printf '%s\\n' fxargvalias; }"
+        )
+        self.shell.send("_fx_handle_not_found fxargvaliax " + " ".join(map(quote, arguments)) + "\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.assertIn("fxargvalias", output)
+        self.shell.send("\n")
+        output += self.shell.read_until_idle(PROMPT)
+        self.assertTrue(log_path.exists(), output)
+        self.assertEqual(arguments, json.loads(log_path.read_text(encoding="utf-8")))
+        self.assertFalse(semicolon_marker.exists(), output)
+        self.assertFalse(substitution_marker.exists(), output)
+
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_confirmation_flow(self):
         self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
@@ -175,6 +234,11 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertIn(f"ZSH_EDIT_STATE=0:touch {marker}", output)
         self.assertFalse(marker.exists())
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_argv_confirmation_preserves_arguments(self):
+        self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
+        self.exercise_argv_confirmation()
+
     @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
     def test_bash_confirmation_flow(self):
         bash = shutil.which("bash")
@@ -183,6 +247,12 @@ class InteractiveAdapterTest(unittest.TestCase):
             self.skipTest("Bash 4+ is required for the Enter hook")
         self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
         self.exercise_confirmation_flow(test_edit=True)
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_argv_confirmation_preserves_arguments(self):
+        bash = shutil.which("bash")
+        self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
+        self.exercise_argv_confirmation()
 
 
 if __name__ == "__main__":
