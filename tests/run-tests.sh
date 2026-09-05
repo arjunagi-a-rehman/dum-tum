@@ -5,11 +5,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# Print a cyan info message. $*=message
 info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
-# Print a green success message. $*=message
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
-# Print a red error message to stderr. $*=message
 err()  { printf '\033[31m✗\033[0m %s\n' "$*" >&2; }
 
 info "Python unit tests"
@@ -20,14 +17,18 @@ info "Shell function tests"
 bash tests/test_shell.sh
 ok "Shell function tests passed"
 
-if FX_TEST_FORCE_PROVIDER_FAILURE=1 bash tests/test_shell.sh >/dev/null 2>&1; then
-  err "Shell failure propagation self-test unexpectedly passed"
-  exit 1
-fi
+for mode in assertion abort; do
+  if FX_TEST_HARNESS_MODE="$mode" bash tests/test_shell.sh >/dev/null 2>&1; then
+    err "Shell $mode propagation self-test unexpectedly passed"
+    exit 1
+  fi
+done
 ok "Shell failure propagation self-test passed"
 
 info "Shell syntax checks"
-bash -n install.sh src/fixit-common.sh src/fixit.bash
+for script in install.sh src/fixit-common.sh src/fixit.bash; do
+  bash -n "$script"
+done
 if ! command -v zsh >/dev/null 2>&1; then
   err "zsh is required for the syntax gate"
   exit 1
