@@ -211,14 +211,18 @@ validate_managed_block() {
     err "Refusing to update non-file rc path: $rc_file"
     return 1
   fi
+  if [[ "$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_nlink)' "$target")" -gt 1 ]]; then
+    err "Refusing to replace hard-linked rc file: $rc_file"
+    return 1
+  fi
   if ! awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
-    index($0, begin) {
+    $0 == begin {
       if ($0 != begin || state != 0) bad=1
       begins++
       state=1
       next
     }
-    index($0, end) {
+    $0 == end {
       if ($0 != end || state != 1) bad=1
       ends++
       state=2
@@ -236,6 +240,11 @@ validate_managed_block() {
 }
 
 preflight_rc_updates() {
+  if [[ "$DO_ZSH" -eq 1 && "$DO_BASH" -eq 1 ]] &&
+     [[ "$(resolve_rc_file "$ZSHRC")" == "$(resolve_rc_file "$BASHRC")" ]]; then
+    err "Bash and zsh rc paths must resolve to distinct files"
+    return 1
+  fi
   [[ "$DO_ZSH" -eq 0 ]] || validate_managed_block "$ZSHRC" || return 1
   [[ "$DO_BASH" -eq 0 ]] || validate_managed_block "$BASHRC" || return 1
 }
