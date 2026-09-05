@@ -119,7 +119,7 @@ class TimeoutTests(unittest.TestCase):
 
                 result = self.invoke(
                     shell,
-                    "_fx_timeout 1 "
+                    "_fx_timeout 3 "
                     f"{shlex.quote(str(parent))} {shlex.quote(str(pidfile))}",
                 )
                 self.assertEqual(result.returncode, 124, result.stderr)
