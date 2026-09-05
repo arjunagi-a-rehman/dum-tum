@@ -433,4 +433,21 @@ fi
 [[ ! -e "$TMPD/invalid-install" ]]
 grep -q 'GitHub returned an invalid dum-tum revision' "$TMPD/invalid-output"
 
+mkdir -p "$TMPD/review-link-home"
+run_local_install "$TMPD/review-link-home" "$TMPD/review-link-target" bash >/dev/null
+ln -s "$TMPD/review-link-target" "$TMPD/review-link"
+for suffix in / /.; do
+ if env HOME="$TMPD/review-link-home" FIXIT_HOME="$TMPD/review-link$suffix" PATH=/usr/bin:/bin \
+  "$ROOT/install.sh" --uninstall >/dev/null 2>&1; then exit 1; fi
+ assert_runtime_matches_repo "$TMPD/review-link-target"
+done
+mkdir -p "$TMPD/review-partial-home" "$TMPD/review-partial-source/src"
+cp "$ROOT/src/fixit-common.sh" "$TMPD/review-partial-source/src/"
+if env HOME="$TMPD/review-partial-home" FIXIT_HOME="$TMPD/review-partial-install" \
+ FIXIT_RAW="file://$TMPD/review-partial-source" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash < "$ROOT/install.sh" >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$TMPD/review-partial-install" ]]
+run_local_install "$TMPD/review-partial-home" "$TMPD/review-partial-install" bash >/dev/null
+assert_runtime_matches_repo "$TMPD/review-partial-install"
+
 printf 'Installer tests passed\n'
