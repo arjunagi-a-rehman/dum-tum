@@ -423,6 +423,8 @@ def repair_failed_line(line: str, safe_heads: list, candidates=None, cwd: str = 
                 best_distance = distance
         if not best or best_distance > 2 or best_distance * 2 >= len(value) + 2:
             continue
+        if best.startswith("-") or not re.fullmatch(r"[A-Za-z0-9_./+-]+", best):
+            return "edit", value, best, line
         raw_word = line[start:end]
         if raw_word.count(value) != 1:
             return "edit", value, best, line
