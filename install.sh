@@ -291,7 +291,15 @@ target_contains_path() {
   [[ "$protected" == "$target" || "$protected" == "$target/"* ]]
 }
 
+normalize_install_path() {
+  while [[ "$INSTALL_DIR" != / && ( "$INSTALL_DIR" == */ || "$INSTALL_DIR" == */. ) ]]; do
+    INSTALL_DIR="${INSTALL_DIR%/}"
+    INSTALL_DIR="${INSTALL_DIR%/.}"
+  done
+}
+
 validate_uninstall_target() {
+  normalize_install_path
   local target home_path pwd_path protected
   UNINSTALL_TARGET=""
   if [[ "$FIXIT_HOME_WAS_SET" == x && -z "${FIXIT_HOME:-}" ]]; then
@@ -332,6 +340,7 @@ validate_uninstall_target() {
 }
 
 validate_install_target() {
+  normalize_install_path
   [[ ! -L "$INSTALL_DIR" ]] || {
     err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
     return 1
@@ -523,8 +532,11 @@ resolve_runtime_raw() {
   ok "Pinned runtime source: $sha"
 }
 
-install_script() {
-  local f use_local=0 sentinel_tmp
+install_script() (
+  local f use_local=0 sentinel_tmp destination="$INSTALL_DIR"
+  INSTALL_DIR="$(mktemp -d)" || return 1
+  trap 'rm -rf "$INSTALL_DIR"' EXIT
+  set -e
   if [[ -n "$SELF_DIR" ]]; then
     use_local=1
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
@@ -559,8 +571,12 @@ install_script() {
     rm -f "$sentinel_tmp"
     return 1
   }
-  ok "Installed → $INSTALL_DIR"
-}
+  mkdir -p "$destination"
+  for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py "$INSTALL_SENTINEL"; do
+    cp "$INSTALL_DIR/$f" "$destination/$f"
+  done
+  ok "Installed → $destination"
+)
 
 detect_ai_clis() {
   HAVE_OPENCODE=0
