@@ -14,6 +14,7 @@ Usage:
 import json
 import os
 import re
+import shlex
 import sys
 from typing import Any
 
@@ -427,9 +428,9 @@ def repair_failed_line(line: str, safe_heads: list, candidates=None, cwd: str = 
         raw_word = line[start:end]
         if raw_word.count(value) != 1:
             return "edit", value, best, line
-        replacement = raw_word.replace(value, best, 1)
+        replacement = shlex.quote(best)
         repaired = line[:start] + replacement + line[end:]
-        if not has_assignments and not re.search(r'''['"\\|&;<>()$`*?\[\]{}#!~\n]''', line):
+        if not has_assignments and not re.search(r'''['"\\|&;<>()$`*?\[\]{}#!~\n]''', repaired):
             return "argv", value, best, repaired
         return "run", value, best, repaired
     return None

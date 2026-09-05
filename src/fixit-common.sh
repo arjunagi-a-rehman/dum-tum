@@ -138,6 +138,7 @@ _fx_quote_argv() {
 }
 
 _fx_confirm() {
+  [[ -t 2 ]] || return 1
   local mode="$1" cmd="$2" key
   shift 2
   [[ -z "$cmd" ]] && return 1
@@ -217,7 +218,7 @@ _fx_handle_not_found() {
 
   out=$(_fx_all_commands | _fx_best "$cmd")
   d=${out%%$'\t'*}; best=${out#*$'\t'}
-  if _fx_looks_like_nl "$cmd" "$@" \
+  if (( $# > 0 )) && _fx_looks_like_nl "$cmd" "$@" \
       && ! { [[ -n "$best" ]] && _fx_ok "$d" "${#cmd}" 1 \
         && { _fx_in_list "$best" "${_FX_AUTORUN_SAFE[@]}" \
           || _fx_in_list "$best" "${_FX_MULTICMD[@]}"; }; }; then
