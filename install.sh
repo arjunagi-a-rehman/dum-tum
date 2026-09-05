@@ -149,6 +149,32 @@ ok()    { printf '\033[32m✓\033[0m %s\n' "$*"; }
 warn()  { printf '\033[33m!\033[0m %s\n' "$*"; }
 err()   { printf '\033[31m✗\033[0m %s\n' "$*" >&2; }
 
+require_single_line() {
+  local name="$1" value="$2"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    err "$name must not contain newline characters"
+    return 1
+  fi
+}
+
+validate_single_line_inputs() {
+  require_single_line HOME "$HOME" || return 1
+  require_single_line FIXIT_HOME "$INSTALL_DIR" || return 1
+  require_single_line ZSHRC "$ZSHRC" || return 1
+  require_single_line BASHRC "$BASHRC" || return 1
+  require_single_line FIXIT_RAW "$REPO_RAW" || return 1
+  require_single_line provider "$PROVIDER" || return 1
+  require_single_line model "$MODEL" || return 1
+  require_single_line variant "$VARIANT" || return 1
+  require_single_line key "$API_KEY" || return 1
+}
+
+shell_quote() {
+  local value="${1:-}"
+  value=${value//\'/\'\\\'\'}
+  printf "'%s'" "$value"
+}
+
 OS="$(uname -s 2>/dev/null || echo unknown)"
 case "$OS" in
   Darwin) OS_NAME="macOS" ;;
@@ -476,6 +502,27 @@ select_provider() {
 }
 
 # ---------- API key (openrouter/openai/anthropic/gemini) ----------
+read_saved_key() {
+  python3 - "$1" "$2" <<'PYKEY'
+import re
+import shlex
+import sys
+
+value = ""
+with open(sys.argv[1]) as source:
+    for line in source:
+        match = re.match(r"^\s*export " + re.escape(sys.argv[2]) + r"=(.*)$", line)
+        if match:
+            try:
+                words = shlex.split(match.group(1), comments=True, posix=True)
+            except ValueError:
+                continue
+            if len(words) == 1:
+                value = words[0]
+sys.stdout.write(value)
+PYKEY
+}
+
 maybe_ask_key() {
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
@@ -497,7 +544,7 @@ maybe_ask_key() {
 
   if ! is_interactive; then
     if [[ -z "$API_KEY" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
-      API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+      API_KEY="$(read_saved_key "$ZSHRC" "$key_var")"
     fi
     if [[ -n "$API_KEY" ]]; then
       ok "$label API key provided"
@@ -512,7 +559,7 @@ maybe_ask_key() {
   [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
   if [[ -z "$hint" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
     hint="(key already in zshrc — Enter keeps it, or paste a new one)"
-    API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+    API_KEY="$(read_saved_key "$ZSHRC" "$key_var")"
   fi
 
   echo ""
@@ -966,20 +1013,16 @@ test_ai() {
 write_rc_block() {
   local rc_file="$1" adapter="$2"
   local key_line model_line provider_line variant_line
-  provider_line="export FX_PROVIDER=\"${PROVIDER:-none}\""
+  provider_line="export FX_PROVIDER=$(shell_quote "${PROVIDER:-none}")"
 
   if [[ -n "$MODEL" ]]; then
-    local mesc="${MODEL//\\/\\\\}"
-    mesc="${mesc//\"/\\\"}"
-    model_line="export FX_MODEL=\"$mesc\""
+    model_line="export FX_MODEL=$(shell_quote "$MODEL")"
   else
     model_line='# export FX_MODEL="..."   # optional; omit to use provider default'
   fi
 
   if [[ -n "$VARIANT" ]]; then
-    local vesc="${VARIANT//\\/\\\\}"
-    vesc="${vesc//\"/\\\"}"
-    variant_line="export FX_VARIANT=\"$vesc\""
+    variant_line="export FX_VARIANT=$(shell_quote "$VARIANT")"
   else
     variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode/claude/antigravity)'
   fi
@@ -993,9 +1036,7 @@ write_rc_block() {
     gemini)     key_placeholder="AIza..." ;;
   esac
   if [[ -n "$key_var" && -n "$API_KEY" ]]; then
-    local esc="${API_KEY//\\/\\\\}"
-    esc="${esc//\"/\\\"}"
-    key_line="export ${key_var}=\"$esc\""
+    key_line="export ${key_var}=$(shell_quote "$API_KEY")"
   elif [[ -n "$key_var" ]]; then
     key_line="# export ${key_var}=\"${key_placeholder}\"   # uncomment and add your key"
   else
@@ -1006,7 +1047,7 @@ write_rc_block() {
   block=$(cat <<EOF
 $MARKER_BEGIN
 # https://github.com/arjunagi-a-rehman/dum-tum
-source "$INSTALL_DIR/$adapter"
+source $(shell_quote "$INSTALL_DIR/$adapter")
 $provider_line
 $model_line
 $variant_line
@@ -1202,6 +1243,7 @@ EOF
 }
 
 main() {
+  validate_single_line_inputs
   if [[ "$DO_UNINSTALL" -eq 1 ]]; then
     uninstall_fixit
     return 0
@@ -1216,6 +1258,7 @@ main() {
   maybe_ask_key
   select_model
   select_variant
+  validate_single_line_inputs
   test_ai
   write_rc_blocks
   ensure_shell_default
