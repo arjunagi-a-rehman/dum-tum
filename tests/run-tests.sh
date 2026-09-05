@@ -23,6 +23,10 @@ for mode in assertion abort; do
     exit 1
   fi
 done
+if FX_TEST_FORCE_PROVIDER_FAILURE=1 bash tests/test_shell.sh >/dev/null 2>&1; then
+  err "Shell provider failure propagation self-test unexpectedly passed"
+  exit 1
+fi
 ok "Shell failure propagation self-test passed"
 
 info "Shell syntax checks"

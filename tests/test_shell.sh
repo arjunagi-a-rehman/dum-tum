@@ -31,6 +31,13 @@ check_rc() { # $1=desc $2=expected rc $3...=cmd
   if [[ "$got" == "$want" ]]; then ok "$desc"; else bad "$desc (expected rc $want, got $got)"; fi
 }
 
+finish_tests() {
+  PASS="$(grep -c '^pass$' "$RESULTS" || true)"
+  FAIL="$(grep -c '^fail$' "$RESULTS" || true)"
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+  (( FAIL == 0 ))
+}
+
 case "${FX_TEST_HARNESS_MODE:-}" in
   assertion) (check_eq "forced provider failure" expected actual); exit $? ;;
   abort) (set -u; unset FX_TEST_UNSET; printf '%s' "$FX_TEST_UNSET"); exit $? ;;
@@ -135,6 +142,10 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
 )
 rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
+if [[ "${FX_TEST_FORCE_PROVIDER_FAILURE:-0}" -eq 1 ]]; then
+  finish_tests
+  exit $?
+fi
 (
   FX_PROVIDER=openrouter
   unset OPENROUTER_API_KEY
@@ -376,7 +387,4 @@ case "$out" in
   *) bad "sys prompt mentions DANGER prefix" ;;
 esac
 
-PASS="$(grep -c '^pass$' "$RESULTS" || true)"
-FAIL="$(grep -c '^fail$' "$RESULTS" || true)"
-printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
-(( FAIL == 0 ))
+finish_tests
