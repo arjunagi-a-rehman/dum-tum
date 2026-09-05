@@ -112,6 +112,7 @@ _fx_quote_argv() {
 }
 
 _fx_confirm() {
+  [[ -t 2 ]] || return 1
   local mode="$1" cmd="$2" key
   shift 2
   [[ -z "$cmd" ]] && return 1
