@@ -104,7 +104,11 @@ def _redact_secret_value(match) -> str:
 
 def redact_secrets(text: str) -> str:
     text = re.sub(
-        r'(?i)(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+[^\r\n"\']+',
+        r'(?i)(["\'])(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+(?:\\.|(?!\1)[^\r\n])*\1',
+        r'\1\2[REDACTED]\1', text,
+    )
+    text = re.sub(
+        r'(?i)(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+[^\r\n]+',
         r'\g<1>[REDACTED]', text,
     )
     for pattern in _SECRET_VALUE_PATTERNS:
