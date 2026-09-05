@@ -33,11 +33,7 @@ zsh -n src/fixit.zsh
 ok "Shell syntax OK"
 
 info "User-facing product naming"
-if grep -Eiq 'fixit(\.zsh)? (installer|installed|uninstalled|for bash|block)|installing fixit|uninstalling fixit|remove fixit' \
-  install.sh package.json README.md; then
-  err "Found a user-facing fixit product-name regression"
-  exit 1
-fi
+python3 tests/check_naming.py
 ok "User-facing product naming is consistent"
 
 if ! command -v shellcheck >/dev/null 2>&1; then
