@@ -52,7 +52,7 @@ _SECRET_VALUE_PATTERNS = (
         r'(?:API_?KEY|ACCESS_?KEY(?:_ID)?|SECRET(?:_KEY)?|TOKEN|'
         r'PASS(?:WORD|WD)?|CREDENTIALS?)|'
         r'[A-Z_][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASS(?:WORD|WD)?|_CREDENTIALS?)'
-        r')\b\s*=\s*)' + _SECRET_VALUE
+        r')(?:_[A-Z0-9]+)*\b\s*=\s*)' + _SECRET_VALUE
     ),
     re.compile(
         r'(?i)(?P<prefix>--(?:api[-_]?key|apikey|access[-_]?key|client[-_]?secret|'
@@ -70,7 +70,7 @@ _SECRET_VALUE_PATTERNS = (
         r'(?i)(?<![A-Z0-9_])(?P<prefix>["\']?(?:'
         r'api[-_ ]?key|apikey|access[-_ ]?key|client[-_ ]?secret|password|passwd|'
         r'auth[-_ ]?token|token|secret|credentials?'
-        r')["\']?\s*[:=]\s*)' + _SECRET_VALUE
+        r')["\']?\s*(?:=\s*|:\s+))' + _SECRET_VALUE
     ),
 )
 
@@ -93,7 +93,7 @@ _HIGH_CONFIDENCE_KEYS = re.compile(
 )
 
 
-def _redact_secret_value(match: re.Match) -> str:
+def _redact_secret_value(match) -> str:
     prefix = match.group("prefix")
     if match.group("double") is not None:
         return f'{prefix}"[REDACTED]"'
@@ -103,6 +103,10 @@ def _redact_secret_value(match: re.Match) -> str:
 
 
 def redact_secrets(text: str) -> str:
+    text = re.sub(
+        r'(?i)(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+[^\r\n"\']+',
+        r'\g<1>[REDACTED]', text,
+    )
     for pattern in _SECRET_VALUE_PATTERNS:
         text = pattern.sub(_redact_secret_value, text)
     text = _CREDENTIAL_URL.sub(r'\g<prefix>[REDACTED]', text)
@@ -121,15 +125,22 @@ def head_of(s: str) -> str:
     return s.split()[0].split("/")[-1] if s else ""
 
 
+def normalize_command(s: str) -> str:
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "`\"'":
+        s = s[1:-1].strip()
+    return s
+
+
 def is_command(s: str) -> bool:
     """Return whether a line begins with a plausible installed or known command."""
-    s = s.strip().strip("`").strip('"\'')
+    s = normalize_command(s)
     if not s or s.startswith("http") or s.startswith("#") or PROSE.match(s):
         return False
     if not re.match(r"^[a-zA-Z0-9_./~+-]+(?:\s|$)", s):
         return False
     head = head_of(s)
-    return head in HEADS or shutil.which(head) is not None or s.startswith(("./", "../", "/", "~/"))
+    return head in os.environ.get("FX_COMMAND_NAMES", "").splitlines() or head in HEADS or shutil.which(head) is not None or s.startswith(("./", "../", "/", "~/"))
 
 
 def extract(t: str) -> str:
@@ -144,16 +155,16 @@ def extract(t: str) -> str:
             continue
         if i + 1 >= len(lines) or lines[i + 1].startswith("# DANGER:"):
             return ""
-        command = lines[i + 1].strip("`").strip('"\'')
+        command = normalize_command(lines[i + 1])
         return f"{ln}\n{command}" if is_command(command) else ""
     for c in reversed(re.findall(r"`([^`\n]+)`", t)):
-        c = c.strip().strip("\"'")
+        c = normalize_command(c)
         if is_command(c):
             return c
     for raw_line in lines:
         if raw_line.startswith("```"):
             continue
-        ln = raw_line.strip("`")
+        ln = normalize_command(raw_line)
         if ln.startswith("#") or PROSE.match(ln):
             continue
         if is_command(ln):
@@ -398,6 +409,14 @@ def run_with_timeout(seconds: float, command: list) -> int:
         return 126
 
     timed_out = False
+    interrupted = 0
+    previous_handlers = {}
+
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt(signum)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, interrupt)
     try:
         stdout, stderr = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
@@ -411,7 +430,24 @@ def run_with_timeout(seconds: float, command: list) -> int:
         else:
             _kill_process_group(process, signal.SIGKILL)
 
+    except KeyboardInterrupt as exc:
+        interrupted = exc.args[0] if exc.args else signal.SIGINT
+        for signum in previous_handlers:
+            signal.signal(signum, signal.SIG_IGN)
+        _kill_process_group(process, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(process, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        _kill_process_group(process, signal.SIGKILL)
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
     _write_process_output(stdout, stderr)
+    if interrupted:
+        return 128 + interrupted
     if timed_out:
         return 124
     return process.returncode if process.returncode >= 0 else 128 - process.returncode
