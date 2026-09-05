@@ -5,8 +5,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Print a cyan info message. $*=message
 info() { printf '\033[36m==>\033[0m %s\n' "$*"; }
+# Print a green success message. $*=message
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
+# Print a red error message to stderr. $*=message
 err()  { printf '\033[31m✗\033[0m %s\n' "$*" >&2; }
 
 info "Python unit tests"

@@ -11,10 +11,12 @@ RESULTS="$TMPD/results"
 : > "$RESULTS"
 trap 'rm -rf "$TMPD"' EXIT
 
+# Record a pass result and print a green checkmark line. $1=description
 ok() {
   printf 'pass\n' >> "$RESULTS"
   printf '\033[32m✓\033[0m %s\n' "$1"
 }
+# Record a fail result, print a red X line, and return failure. $1=description
 bad() {
   printf 'fail\n' >> "$RESULTS"
   printf '\033[31m✗\033[0m %s\n' "$1"
