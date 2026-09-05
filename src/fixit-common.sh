@@ -275,7 +275,7 @@ _fx_ai_ready() {
 }
 
 _fx_ai_extract() {  # $1=provider output kind; stdin -> one command on stdout
-  python3 "$_FX_AI_PY" extract "$1"
+  FX_COMMAND_NAMES="$(_fx_all_commands)" python3 "$_FX_AI_PY" extract "$1"
 }
 
 
