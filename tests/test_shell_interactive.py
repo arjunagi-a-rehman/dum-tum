@@ -62,7 +62,7 @@ class ShellSession:
         self.send(command + "\r")
         return self.read_until_idle(PROMPT)
 
-    def read_until_idle(self, needle, idle=0.15):
+    def read_until_idle(self, needle, idle=0.5):
         output = self.read_until(needle)
         if self.buffer:
             output += self.buffer.decode(errors="replace")

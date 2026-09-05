@@ -85,7 +85,7 @@ dum_tum_unload() {
   add-zsh-hook -d precmd _fx_precmd 2>/dev/null
   local definition widget
   local -a definitions words
-  if zle -l "$_FX_ZSH_SAVED_WIDGET" >/dev/null 2>&1; then
+  if zle -l -a "$_FX_ZSH_SAVED_WIDGET" >/dev/null 2>&1; then
     definitions=("${(@f)$(zle -l -L 2>/dev/null)}")
     for definition in "${definitions[@]}"; do
       words=(${(z)definition})
