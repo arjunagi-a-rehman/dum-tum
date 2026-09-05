@@ -116,7 +116,8 @@ class TimeoutTests(unittest.TestCase):
             os.kill(pid, 0)
         except ProcessLookupError:
             return False
-        return True
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+        return bool(state.stdout.strip()) and not state.stdout.lstrip().startswith("Z")
 
 
 if __name__ == "__main__":

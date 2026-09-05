@@ -398,6 +398,14 @@ def run_with_timeout(seconds: float, command: list) -> int:
         return 126
 
     timed_out = False
+    interrupted = 0
+    previous_handlers = {}
+
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt(signum)
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        previous_handlers[signum] = signal.signal(signum, interrupt)
     try:
         stdout, stderr = process.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
@@ -411,7 +419,24 @@ def run_with_timeout(seconds: float, command: list) -> int:
         else:
             _kill_process_group(process, signal.SIGKILL)
 
+    except KeyboardInterrupt as exc:
+        interrupted = exc.args[0] if exc.args else signal.SIGINT
+        for signum in previous_handlers:
+            signal.signal(signum, signal.SIG_IGN)
+        _kill_process_group(process, signal.SIGTERM)
+        try:
+            stdout, stderr = process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(process, signal.SIGKILL)
+            stdout, stderr = process.communicate()
+        _kill_process_group(process, signal.SIGKILL)
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
+
     _write_process_output(stdout, stderr)
+    if interrupted:
+        return 128 + interrupted
     if timed_out:
         return 124
     return process.returncode if process.returncode >= 0 else 128 - process.returncode
