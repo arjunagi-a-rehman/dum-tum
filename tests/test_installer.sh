@@ -326,5 +326,14 @@ mkdir -p "$TMPD/review-marker-home"
 env HOME="$TMPD/review-marker-home" FIXIT_HOME="$TMPD/review-marker-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --model '# >>> fixit.zsh >>>' --shell bash >/dev/null
 run_local_install "$TMPD/review-marker-home" "$TMPD/review-marker-install" bash >/dev/null
+mkdir -p "$TMPD/review-key-home"
+review_key="abc'def"
+env HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
+  OPENROUTER_API_KEY="$review_key" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
+env -u OPENROUTER_API_KEY HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
+  PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
+zsh -c 'source "$1"; [[ "$OPENROUTER_API_KEY" == "$2" ]]' zsh "$TMPD/review-key-home/.zshrc" "$review_key"
 
 printf 'Installer tests passed\n'
