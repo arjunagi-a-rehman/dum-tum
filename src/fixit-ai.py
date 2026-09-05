@@ -49,7 +49,7 @@ _SECRET_VALUE_PATTERNS = (
         r'(?:API_?KEY|ACCESS_?KEY(?:_ID)?|SECRET(?:_KEY)?|TOKEN|'
         r'PASS(?:WORD|WD)?|CREDENTIALS?)|'
         r'[A-Z_][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASS(?:WORD|WD)?|_CREDENTIALS?)'
-        r')\b\s*=\s*)' + _SECRET_VALUE
+        r')(?:_[A-Z0-9]+)*\b\s*=\s*)' + _SECRET_VALUE
     ),
     re.compile(
         r'(?i)(?P<prefix>--(?:api[-_]?key|apikey|access[-_]?key|client[-_]?secret|'
@@ -67,7 +67,7 @@ _SECRET_VALUE_PATTERNS = (
         r'(?i)(?<![A-Z0-9_])(?P<prefix>["\']?(?:'
         r'api[-_ ]?key|apikey|access[-_ ]?key|client[-_ ]?secret|password|passwd|'
         r'auth[-_ ]?token|token|secret|credentials?'
-        r')["\']?\s*[:=]\s*)' + _SECRET_VALUE
+        r')["\']?\s*(?:=\s*|:\s+))' + _SECRET_VALUE
     ),
 )
 
@@ -90,7 +90,7 @@ _HIGH_CONFIDENCE_KEYS = re.compile(
 )
 
 
-def _redact_secret_value(match: re.Match) -> str:
+def _redact_secret_value(match) -> str:
     prefix = match.group("prefix")
     if match.group("double") is not None:
         return f'{prefix}"[REDACTED]"'
@@ -100,6 +100,10 @@ def _redact_secret_value(match: re.Match) -> str:
 
 
 def redact_secrets(text: str) -> str:
+    text = re.sub(
+        r'(?i)(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+[^\r\n"\']+',
+        r'\g<1>[REDACTED]', text,
+    )
     for pattern in _SECRET_VALUE_PATTERNS:
         text = pattern.sub(_redact_secret_value, text)
     text = _CREDENTIAL_URL.sub(r'\g<prefix>[REDACTED]', text)

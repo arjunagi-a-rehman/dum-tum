@@ -228,7 +228,7 @@ _fx_strip_ctrl() {  # stdin -> stdout (keeps newline/tab)
 
 _fx_ai_user_payload() {  # $* = intent
   local ctx lsal proj als task
-  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD"
+  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $(printf '%s' "$PWD" | _fx_redact_secrets)"
   lsal="$(ls -al 2>/dev/null | _fx_strip_ctrl | head -20 | _fx_redact_secrets)"
   proj="$(python3 "$_FX_AI_PY" proj 2>/dev/null | _fx_strip_ctrl | _fx_redact_secrets)"
   als="$(alias 2>/dev/null | _fx_strip_ctrl | head -30 | _fx_redact_secrets)"
