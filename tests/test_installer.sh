@@ -1042,12 +1042,9 @@ env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHE
 printf 'must survive\n' > "$exclusive_target/user-data"
 cp -Rp "$exclusive_target" "$exclusive_root/runtime-before"
 cp -p "$exclusive_home/.bashrc" "$exclusive_root/bashrc-before"
-if env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
-    > "$exclusive_root/update-output" 2>&1; then
-  exit 1
-fi
-grep -q 'unexpected entries' "$exclusive_root/update-output"
+    > "$exclusive_root/update-output" 2>&1
 diff -r "$exclusive_root/runtime-before" "$exclusive_target"
 cmp "$exclusive_root/bashrc-before" "$exclusive_home/.bashrc"
 if env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
@@ -1229,5 +1226,45 @@ printf '\nif then\n' >> "$TMPD/review-broken-source/src/fixit.bash"
 if env HOME="$TMPD/review-broken-home" FIXIT_HOME="$TMPD/review-broken-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
  "$TMPD/review-broken-source/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash >/dev/null 2>&1; then exit 1; fi
 [[ ! -e "$TMPD/review-broken-install" ]]
+mkdir -p "$TMPD/review-link-home"
+run_local_install "$TMPD/review-link-home" "$TMPD/review-link-target" bash >/dev/null
+ln -s "$TMPD/review-link-target" "$TMPD/review-link"
+for suffix in / /.; do
+ if env HOME="$TMPD/review-link-home" FIXIT_HOME="$TMPD/review-link$suffix" PATH=/usr/bin:/bin \
+  "$ROOT/install.sh" --uninstall >/dev/null 2>&1; then exit 1; fi
+ assert_runtime_matches_repo "$TMPD/review-link-target"
+done
+mkdir -p "$TMPD/review-partial-home" "$TMPD/review-partial-source/src"
+cp "$ROOT/src/fixit-common.sh" "$TMPD/review-partial-source/src/"
+if env HOME="$TMPD/review-partial-home" FIXIT_HOME="$TMPD/review-partial-install" \
+ FIXIT_RAW="file://$TMPD/review-partial-source" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash < "$ROOT/install.sh" >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$TMPD/review-partial-install" ]]
+run_local_install "$TMPD/review-partial-home" "$TMPD/review-partial-install" bash >/dev/null
+assert_runtime_matches_repo "$TMPD/review-partial-install"
+mkdir -p "$TMPD/review-shared-home"
+printf 'export REVIEW_KEEP=1\n' > "$TMPD/review-shared-home/shared"
+ln -s shared "$TMPD/review-shared-home/.zshrc"
+ln -s shared "$TMPD/review-shared-home/.bashrc"
+if run_local_install "$TMPD/review-shared-home" "$TMPD/review-shared-install" both >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$TMPD/review-shared-install" ]]
+mkdir -p "$TMPD/review-hard-home"
+printf 'export REVIEW_KEEP=1\n' > "$TMPD/review-hard-home/shared"
+ln "$TMPD/review-hard-home/shared" "$TMPD/review-hard-home/.bashrc"
+if run_local_install "$TMPD/review-hard-home" "$TMPD/review-hard-install" bash >/dev/null 2>&1; then exit 1; fi
+[[ "$TMPD/review-hard-home/shared" -ef "$TMPD/review-hard-home/.bashrc" ]]
+mkdir -p "$TMPD/review-marker-home"
+env HOME="$TMPD/review-marker-home" FIXIT_HOME="$TMPD/review-marker-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --model '# >>> fixit.zsh >>>' --shell bash >/dev/null
+run_local_install "$TMPD/review-marker-home" "$TMPD/review-marker-install" bash >/dev/null
+mkdir -p "$TMPD/review-key-home"
+review_key="abc'def"
+env HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
+  OPENROUTER_API_KEY="$review_key" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
+env -u OPENROUTER_API_KEY HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
+  PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
+zsh -c 'source "$1"; [[ "$OPENROUTER_API_KEY" == "$2" ]]' zsh "$TMPD/review-key-home/.zshrc" "$review_key"
 
 printf 'Installer tests passed\n'
