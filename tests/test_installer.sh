@@ -10,6 +10,7 @@ assert_runtime_matches_repo() {
   for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
     cmp "$ROOT/src/$f" "$install_dir/$f"
   done
+  grep -qxF 'dum-tum-install-v1' "$install_dir/.dum-tum-install"
 }
 
 assert_config_round_trip() {
@@ -259,6 +260,9 @@ mkdir -p "$preflight_home" "$TMPD/uninstall-preflight-target"
 printf '%s\n' '# >>> fixit.zsh >>>' 'managed' '# <<< fixit.zsh <<<' > "$preflight_home/.zshrc"
 printf '%s\n' 'before' '# >>> fixit.zsh >>>' 'unterminated' > "$preflight_home/.bashrc"
 printf 'runtime-still-here\n' > "$TMPD/uninstall-preflight-target/runtime"
+cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
+  "$ROOT/src/fixit-ai.py" "$TMPD/uninstall-preflight-target/"
+printf 'dum-tum-install-v1\n' > "$TMPD/uninstall-preflight-target/.dum-tum-install"
 cp "$preflight_home/.zshrc" "$preflight_home/zshrc-original"
 cp "$preflight_home/.bashrc" "$preflight_home/bashrc-original"
 if env \
@@ -272,6 +276,124 @@ fi
 cmp "$preflight_home/zshrc-original" "$preflight_home/.zshrc"
 cmp "$preflight_home/bashrc-original" "$preflight_home/.bashrc"
 grep -qxF 'runtime-still-here' "$TMPD/uninstall-preflight-target/runtime"
+
+library="$TMPD/install-library.sh"
+sed '$d' "$ROOT/install.sh" > "$library"
+
+assert_uninstall_target_rejected() {
+  local name="$1" home="$2" target="$3"
+  if ! env \
+    HOME="$home" \
+    FIXIT_HOME="$target" \
+    PATH=/usr/bin:/bin \
+    SHELL=/bin/bash \
+    /bin/bash -c '
+      library=$1
+      set --
+      source "$library"
+      ! validate_uninstall_target >/dev/null 2>&1
+    ' dum-tum-test "$library"; then
+    printf 'Expected uninstall target rejection: %s\n' "$name" >&2
+    exit 1
+  fi
+}
+
+validation_home="$TMPD/validation-home"
+mkdir -p "$validation_home"
+assert_uninstall_target_rejected empty "$validation_home" ""
+assert_uninstall_target_rejected root "$validation_home" /
+assert_uninstall_target_rejected home "$validation_home" "$validation_home"
+assert_uninstall_target_rejected workspace "$validation_home" "$ROOT"
+assert_uninstall_target_rejected ancestor "$validation_home" "$TMPD"
+assert_uninstall_target_rejected broad-system-dir "$validation_home" /etc
+
+symlink_target="$TMPD/symlink-uninstall-real"
+symlink_path="$TMPD/symlink-uninstall-target"
+mkdir -p "$symlink_target"
+printf 'dum-tum-install-v1\n' > "$symlink_target/.dum-tum-install"
+ln -s "$symlink_target" "$symlink_path"
+assert_uninstall_target_rejected symlink "$validation_home" "$symlink_path"
+
+unrelated_target="$TMPD/unrelated-target"
+mkdir -p "$unrelated_target"
+printf 'keep-me\n' > "$unrelated_target/important"
+assert_uninstall_target_rejected unrelated "$validation_home" "$unrelated_target"
+
+incomplete_target="$TMPD/incomplete-target"
+mkdir -p "$incomplete_target"
+cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" "$incomplete_target/"
+assert_uninstall_target_rejected incomplete-legacy "$validation_home" "$incomplete_target"
+
+invalid_sentinel_target="$TMPD/invalid-sentinel-target"
+mkdir -p "$invalid_sentinel_target"
+cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
+  "$ROOT/src/fixit-ai.py" "$invalid_sentinel_target/"
+printf 'not-dum-tum\n' > "$invalid_sentinel_target/.dum-tum-install"
+assert_uninstall_target_rejected invalid-sentinel "$validation_home" "$invalid_sentinel_target"
+
+invalid_home="$TMPD/invalid-target-home"
+mkdir -p "$invalid_home"
+printf '%s\n' '# >>> fixit.zsh >>>' 'managed' '# <<< fixit.zsh <<<' > "$invalid_home/.bashrc"
+cp "$invalid_home/.bashrc" "$invalid_home/bashrc-original"
+if env \
+  HOME="$invalid_home" \
+  FIXIT_HOME="$unrelated_target" \
+  PATH=/usr/bin:/bin \
+  SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/invalid-target-output" 2>&1; then
+  exit 1
+fi
+cmp "$invalid_home/bashrc-original" "$invalid_home/.bashrc"
+grep -qxF 'keep-me' "$unrelated_target/important"
+
+empty_home="$TMPD/empty-target-home"
+mkdir -p "$empty_home/.local/share/fixit"
+printf 'dum-tum-install-v1\n' > "$empty_home/.local/share/fixit/.dum-tum-install"
+printf '%s\n' '# >>> fixit.zsh >>>' 'managed' '# <<< fixit.zsh <<<' > "$empty_home/.bashrc"
+cp "$empty_home/.bashrc" "$empty_home/bashrc-original"
+if env \
+  HOME="$empty_home" \
+  FIXIT_HOME= \
+  PATH=/usr/bin:/bin \
+  SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/empty-target-output" 2>&1; then
+  exit 1
+fi
+cmp "$empty_home/bashrc-original" "$empty_home/.bashrc"
+[[ -d "$empty_home/.local/share/fixit" ]]
+
+legacy_home="$TMPD/legacy-home"
+legacy_target="$TMPD/legacy-target"
+mkdir -p "$legacy_home" "$legacy_target"
+cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
+  "$ROOT/src/fixit-ai.py" "$legacy_target/"
+env \
+  HOME="$legacy_home" \
+  FIXIT_HOME="$legacy_target" \
+  PATH=/usr/bin:/bin \
+  SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/legacy-output"
+[[ ! -e "$legacy_target" ]]
+
+default_home="$TMPD/default-home"
+mkdir -p "$default_home"
+env -u FIXIT_HOME \
+  HOME="$default_home" \
+  PATH=/usr/bin:/bin \
+  SHELL=/bin/bash \
+  "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
+    > "$TMPD/default-install-output"
+grep -qxF 'dum-tum-install-v1' "$default_home/.local/share/fixit/.dum-tum-install"
+env -u FIXIT_HOME \
+  HOME="$default_home" \
+  PATH=/usr/bin:/bin \
+  SHELL=/bin/bash \
+  "$ROOT/install.sh" --uninstall > "$TMPD/default-uninstall-output"
+[[ ! -e "$default_home/.local/share/fixit" ]]
+
+if [[ -n "$(find "$TMPD" -name '.dum-tum-uninstall.*' -print -quit)" ]]; then
+  exit 1
+fi
 
 mkdir -p "$TMPD/pinned-home" "$TMPD/fake-bin"
 cp "$ROOT/tests/fixtures/curl" "$TMPD/fake-bin/curl"
@@ -311,6 +433,22 @@ fi
 [[ ! -e "$TMPD/invalid-install" ]]
 grep -q 'GitHub returned an invalid dum-tum revision' "$TMPD/invalid-output"
 
+mkdir -p "$TMPD/review-link-home"
+run_local_install "$TMPD/review-link-home" "$TMPD/review-link-target" bash >/dev/null
+ln -s "$TMPD/review-link-target" "$TMPD/review-link"
+for suffix in / /.; do
+ if env HOME="$TMPD/review-link-home" FIXIT_HOME="$TMPD/review-link$suffix" PATH=/usr/bin:/bin \
+  "$ROOT/install.sh" --uninstall >/dev/null 2>&1; then exit 1; fi
+ assert_runtime_matches_repo "$TMPD/review-link-target"
+done
+mkdir -p "$TMPD/review-partial-home" "$TMPD/review-partial-source/src"
+cp "$ROOT/src/fixit-common.sh" "$TMPD/review-partial-source/src/"
+if env HOME="$TMPD/review-partial-home" FIXIT_HOME="$TMPD/review-partial-install" \
+ FIXIT_RAW="file://$TMPD/review-partial-source" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash < "$ROOT/install.sh" >/dev/null 2>&1; then exit 1; fi
+[[ ! -e "$TMPD/review-partial-install" ]]
+run_local_install "$TMPD/review-partial-home" "$TMPD/review-partial-install" bash >/dev/null
+assert_runtime_matches_repo "$TMPD/review-partial-install"
 mkdir -p "$TMPD/review-shared-home"
 printf 'export REVIEW_KEEP=1\n' > "$TMPD/review-shared-home/shared"
 ln -s shared "$TMPD/review-shared-home/.zshrc"
