@@ -45,6 +45,16 @@ class TestHeadOf(unittest.TestCase):
 
 
 class TestExtract(unittest.TestCase):
+    def test_outer_quotes_and_literal_argument(self):
+        self.assertEqual(fixit_ai.extract('"ls -la"'), 'ls -la')
+        self.assertEqual(fixit_ai.extract("ls 'file name'"), "ls 'file name'")
+
+    def test_shell_supplied_names(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"FX_COMMAND_NAMES": "my_alias\nmy_function"}):
+            self.assertEqual(fixit_ai.extract("my_alias status"), "my_alias status")
+            self.assertEqual(fixit_ai.extract("my_function argument"), "my_function argument")
+
     def test_simple_command(self):
         self.assertEqual(fixit_ai.extract("ls -la"), "ls -la")
 
@@ -110,11 +120,27 @@ class TestExtract(unittest.TestCase):
 
     def test_danger_without_following_command(self):
         out = fixit_ai.extract("# DANGER: deletes everything")
-        self.assertEqual(out, "# DANGER: deletes everything")
+        self.assertEqual(out, "")
 
     def test_danger_not_first_line(self):
         out = fixit_ai.extract("Here is the fix\n# DANGER: wipes data\nrm -rf /tmp/x")
         self.assertEqual(out, "# DANGER: wipes data\nrm -rf /tmp/x")
+
+    def test_danger_stays_attached_to_backticked_command(self):
+        out = fixit_ai.extract(
+            "# DANGER: wipes data\n`rm -rf /tmp/x`\nSafer option: `ls /tmp/x`"
+        )
+        self.assertEqual(out, "# DANGER: wipes data\nrm -rf /tmp/x")
+
+    def test_danger_requires_a_command_next(self):
+        out = fixit_ai.extract("# DANGER: wipes data\nThis would delete the directory")
+        self.assertEqual(out, "")
+
+    def test_unknown_prose_is_not_a_command(self):
+        self.assertEqual(fixit_ai.extract("Certainly delete all generated files"), "")
+
+    def test_known_single_word_command_is_accepted(self):
+        self.assertEqual(fixit_ai.extract("date"), "date")
 
     def test_whitespace_only_input(self):
         self.assertEqual(fixit_ai.extract("   \n\t\n  "), "")
@@ -128,156 +154,166 @@ class TestExtract(unittest.TestCase):
 
 class TestParsePayload(unittest.TestCase):
     def test_plain_text_passthrough(self):
-        self.assertEqual(fixit_ai.parse_payload("ls -la"), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload("ls -la", "plain"), "ls -la")
 
     def test_empty(self):
-        self.assertEqual(fixit_ai.parse_payload(""), "")
-        self.assertEqual(fixit_ai.parse_payload("   \n  "), "")
+        for provider in ("plain", "chat", "anthropic", "gemini", "opencode", "claude",
+                         "antigravity"):
+            self.assertEqual(fixit_ai.parse_payload("", provider), "")
+            self.assertEqual(fixit_ai.parse_payload("   \n  ", provider), "")
 
     def test_openrouter_chat_completion(self):
         body = json.dumps({
             "choices": [{"message": {"role": "assistant", "content": "ls -la"}}]
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "ls -la")
+
+    def test_chat_visible_text_parts_are_joined(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": [
+                {"type": "text", "text": "git"},
+                {"type": "text", "text": " status"},
+            ]}}]
+        })
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "git status")
 
     def test_error_payload_reports_and_returns_empty(self):
         body = json.dumps({"error": {"message": "invalid api key"}})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_jsonl_stream_concatenated(self):
+    def test_opencode_stream_fragments_preserve_token_order(self):
         lines = "\n".join([
-            json.dumps({"text": "ls"}),
-            json.dumps({"text": " -la"}),
+            json.dumps({"type": "step_start", "reasoning": "rm -rf /"}),
+            json.dumps({"type": "text", "part": {"type": "text", "text": "git"}}),
+            json.dumps({"type": "text", "part": {"type": "text", "text": " status"}}),
         ])
-        self.assertEqual(fixit_ai.parse_payload(lines), "ls\n -la")
+        self.assertEqual(fixit_ai.parse_payload(lines, "opencode"), "git status")
 
-    def test_single_json_line(self):
-        line = json.dumps({"part": {"text": "pwd"}})
-        self.assertEqual(fixit_ai.parse_payload(line), "pwd")
+    def test_opencode_requires_text_event(self):
+        line = json.dumps({"type": "reasoning", "part": {"type": "text", "text": "rm -rf /"}})
+        self.assertEqual(fixit_ai.parse_payload(line, "opencode"), "")
 
-    def test_invalid_json_returned_raw(self):
+    def test_invalid_json_fails_closed(self):
         raw = "{not valid json"
-        self.assertEqual(fixit_ai.parse_payload(raw), raw)
+        self.assertEqual(fixit_ai.parse_payload(raw, "chat"), "")
 
     def test_error_string_payload(self):
         body = json.dumps({"error": "rate limited"})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_error_with_choices_not_treated_as_error(self):
+    def test_error_with_choices_still_fails_closed(self):
         body = json.dumps({
             "error": {"message": "partial"},
             "choices": [{"message": {"content": "ls -la"}}],
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_jsonl_error_midstream_aborts(self):
+    def test_opencode_error_midstream_aborts(self):
         lines = "\n".join([
-            json.dumps({"text": "ls"}),
+            json.dumps({"type": "text", "part": {"type": "text", "text": "ls"}}),
             json.dumps({"error": {"message": "boom"}}),
         ])
-        self.assertEqual(fixit_ai.parse_payload(lines), "")
+        self.assertEqual(fixit_ai.parse_payload(lines, "opencode"), "")
 
-    def test_jsonl_multiple_json_no_text_returns_empty(self):
-        lines = "\n".join([
-            json.dumps({"id": 1}),
-            json.dumps({"id": 2}),
-        ])
-        self.assertEqual(fixit_ai.parse_payload(lines), "")
-
-    def test_json_array_payload(self):
-        body = json.dumps([{"text": "git"}, {"text": " status"}])
-        self.assertEqual(fixit_ai.parse_payload(body), "git\n status")
-
-    def test_choices_empty_content_falls_back_to_collect(self):
+    def test_hidden_reasoning_is_never_visible_chat_output(self):
         body = json.dumps({
             "choices": [{"message": {"content": "  ", "reasoning": "ls -la"}}]
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "  ")
+
+    def test_reasoning_details_are_never_visible_chat_output(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": "", "reasoning_details": [
+                {"text": "rm -rf /"}
+            ]}}]
+        })
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
     def test_choices_missing_message(self):
         body = json.dumps({"choices": [{}]})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
     def test_empty_choices_array(self):
         body = json.dumps({"choices": []})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_nested_content_dict(self):
-        body = json.dumps({"message": {"content": {"text": "pwd"}}})
-        self.assertEqual(fixit_ai.parse_payload(body), "pwd")
+    def test_malformed_choices_shapes_fail_closed(self):
+        payloads = [
+            {"choices": "not-a-list"},
+            {"choices": [None]},
+            {"choices": [{"message": "not-an-object"}]},
+            {"choices": [{"message": {"content": {"text": "pwd"}}}]},
+            {"choices": [{"message": {"content": [{"type": "text", "text": 7}]}}]},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertEqual(fixit_ai.parse_payload(json.dumps(payload), "chat"), "")
 
-    def test_reasoning_details_collected(self):
-        body = json.dumps({"reasoning_details": [{"text": "ls -la"}]})
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
-
-    def test_part_content_key(self):
-        line = json.dumps({"part": {"content": "mkdir foo"}})
-        self.assertEqual(fixit_ai.parse_payload(line), "mkdir foo")
-
-    def test_claude_result_shape(self):
+    def test_claude_result_uses_only_visible_result(self):
         body = json.dumps({
             "type": "result",
             "subtype": "success",
             "is_error": False,
             "result": "ls -la",
+            "reasoning": "rm -rf /",
+            "reasoning_details": [{"text": "rm -rf /"}],
             "session_id": "abc123",
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "claude"), "ls -la")
+
+    def test_claude_error_result_is_not_executable(self):
+        body = json.dumps({
+            "type": "result", "subtype": "error", "is_error": True, "result": "rm -rf /"
+        })
+        self.assertEqual(fixit_ai.parse_payload(body, "claude"), "")
 
     def test_antigravity_stream_result_shape(self):
+        body = "\n".join([
+            json.dumps({"event": "assistant", "reasoning": "rm -rf /"}),
+            json.dumps({
+                "event": "result",
+                "result": {"status": "SUCCESS", "response": "ls -la\n"},
+            }),
+        ])
+        self.assertEqual(fixit_ai.parse_payload(body, "antigravity"), "ls -la\n")
+
+    def test_antigravity_non_success_is_not_executable(self):
         body = json.dumps({
             "event": "result",
-            "result": {"status": "SUCCESS", "response": "ls -la\n"},
+            "result": {"status": "FAILED", "response": "rm -rf /"},
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la\n")
+        self.assertEqual(fixit_ai.parse_payload(body, "antigravity"), "")
 
-    def test_non_json_mixed_lines_passthrough(self):
-        raw = "some prose\nls -la"
-        self.assertEqual(fixit_ai.parse_payload(raw), raw)
-
-    def test_scalar_json_returned_raw(self):
-        raw = "123"
-        self.assertEqual(fixit_ai.parse_payload(raw), raw)
-
-    def test_anthropic_messages_response(self):
+    def test_anthropic_uses_text_and_ignores_thinking(self):
         body = json.dumps({
-            "content": [{"type": "text", "text": "ls -la"}],
+            "content": [
+                {"type": "thinking", "thinking": "rm -rf /"},
+                {"type": "text", "text": "git"},
+                {"type": "text", "text": " status"},
+            ],
             "stop_reason": "end_turn",
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "anthropic"), "git status")
 
-    def test_gemini_generate_content_response(self):
+    def test_gemini_uses_visible_parts_and_ignores_thoughts(self):
         body = json.dumps({
-            "candidates": [{"content": {"parts": [{"text": "ls -la"}]}}]
+            "candidates": [{"content": {"parts": [
+                {"thought": True, "text": "rm -rf /"},
+                {"text": "git"},
+                {"text": " status"},
+            ]}}]
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "gemini"), "git status")
 
+    def test_provider_shape_is_not_guessed(self):
+        body = json.dumps({"reasoning_details": [{"text": "rm -rf /"}]})
+        for provider in ("chat", "anthropic", "gemini", "opencode", "claude",
+                         "antigravity"):
+            with self.subTest(provider=provider):
+                self.assertEqual(fixit_ai.parse_payload(body, provider), "")
 
-class TestCollectText(unittest.TestCase):
-    def test_plain_string(self):
-        parts = []
-        fixit_ai.collect_text("hello", parts)
-        self.assertEqual(parts, ["hello"])
-
-    def test_blank_strings_ignored(self):
-        parts = []
-        fixit_ai.collect_text("   ", parts)
-        self.assertEqual(parts, [])
-
-    def test_nested_list(self):
-        parts = []
-        fixit_ai.collect_text([{"text": "a"}, ["b", {"content": "c"}]], parts)
-        self.assertEqual(parts, ["a", "b", "c"])
-
-    def test_non_string_scalars_ignored(self):
-        parts = []
-        fixit_ai.collect_text({"text": 42, "content": None, "ok": True}, parts)
-        self.assertEqual(parts, [])
-
-    def test_delta_streaming_shape(self):
-        parts = []
-        fixit_ai.collect_text({"delta": {"content": "ls"}}, parts)
-        self.assertEqual(parts, ["ls"])
+    def test_unknown_provider_kind_fails_closed(self):
+        self.assertEqual(fixit_ai.parse_payload("ls -la", "mystery"), "")
 
 
 class TestBodyCommand(unittest.TestCase):
@@ -351,7 +387,7 @@ class TestBodyCommand(unittest.TestCase):
 
 
 class TestExtractCommand(unittest.TestCase):
-    def _run_extract(self, stdin_text):
+    def _run_extract(self, stdin_text, provider="plain"):
         import io
         from contextlib import redirect_stdout
         old_stdin = sys.stdin
@@ -359,7 +395,7 @@ class TestExtractCommand(unittest.TestCase):
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                fixit_ai.cmd_extract()
+                fixit_ai.cmd_extract(provider)
         finally:
             sys.stdin = old_stdin
         return buf.getvalue()
@@ -369,7 +405,13 @@ class TestExtractCommand(unittest.TestCase):
 
     def test_extract_json_payload(self):
         body = json.dumps({"choices": [{"message": {"content": "git status"}}]})
-        self.assertEqual(self._run_extract(body), "git status\n")
+        self.assertEqual(self._run_extract(body, "chat"), "git status\n")
+
+    def test_extract_hidden_reasoning_prints_nothing(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": "", "reasoning": "rm -rf /"}}]
+        })
+        self.assertEqual(self._run_extract(body, "chat"), "")
 
     def test_extract_no_command_prints_nothing(self):
         self.assertEqual(self._run_extract("just some prose"), "")
