@@ -3,6 +3,7 @@ import pty
 import select
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -12,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "install.sh"
+SHELLS = [path for name in ("bash", "zsh") if (path := shutil.which(name))]
 PROVIDER_KEYS = (
     "OPENROUTER_API_KEY",
     "OPENAI_API_KEY",
@@ -71,8 +73,25 @@ class InstallerKeyHandlingTest(unittest.TestCase):
         script = (
             "#!/bin/sh\n"
             "name=${0##*/}\n"
+            "if [ \"$name\" = opencode ] && [ \"$1\" = run ] && [ \"$2\" = --help ]; then\n"
+            "  printf '%s\\n' '  --pure  disable plugins' '  --format <FORMAT>  choices: json'\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$name\" = opencode ] && [ \"$1\" = debug ] && [ \"$2\" = config ]; then\n"
+            "  printf '%s\\n' '{\"permission\":{\"*\":\"deny\"},\"tools\":{\"*\":false},\"plugin\":[]}'\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$name\" = claude ] && [ \"$1\" = --help ]; then\n"
+            "  printf '%s\\n' '  --tools <TOOLS>' '  --permission-mode <MODE>  choices: plan' '  --safe-mode' '  --disable-slash-commands' '  --strict-mcp-config' '  --mcp-config <CONFIG>' '  --no-session-persistence'\n"
+            "  exit 0\n"
+            "fi\n"
             "if [ \"$name\" = codex ] && [ \"$1\" = exec ] && [ \"$2\" = --help ]; then\n"
-            "  printf '%s\\n' '--output-last-message <FILE>'\n"
+            "  printf '%s\\n' '  --output-last-message <FILE>' '  --sandbox <MODE>  choices: read-only' '  --ignore-user-config' '  --ignore-rules' '  --ephemeral'\n"
+            "  [ \"${DUM_TUM_BAD_CAPABILITY:-0}\" = 1 ] && exit 23\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"$name\" = agy ] && [ \"$1\" = --help ]; then\n"
+            "  printf '%s\\n' '  --sandbox' '  --mode <MODE>  choices: plan' '  --disable-slash-commands' '  --input-format <FORMAT>' '  --output-format <FORMAT>'\n"
             "  exit 0\n"
             "fi\n"
             "counter=\"$DUM_TUM_COUNTER_DIR/$name\"\n"
@@ -119,8 +138,8 @@ class InstallerKeyHandlingTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         config = (self.home / ".zshrc").read_text()
-        self.assertIn('export FX_PROVIDER="openai"', config)
-        self.assertIn('export OPENAI_API_KEY="openai-only-value"', config)
+        self.assertIn("export FX_PROVIDER='openai'", config)
+        self.assertIn("export OPENAI_API_KEY='openai-only-value'", config)
         self.assertNotIn("router-only-value", config)
 
     def test_implicit_multi_provider_keys_are_rejected_as_ambiguous(self):
@@ -143,8 +162,8 @@ class InstallerKeyHandlingTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         config = (self.home / ".zshrc").read_text()
-        self.assertIn('export FX_PROVIDER="gemini"', config)
-        self.assertIn('export GEMINI_API_KEY="preferred-gemini-value"', config)
+        self.assertIn("export FX_PROVIDER='gemini'", config)
+        self.assertIn("export GEMINI_API_KEY='preferred-gemini-value'", config)
         self.assertNotIn("fallback-google-value", config)
 
     def test_loading_new_provider_clears_stale_provider_key(self):
@@ -312,7 +331,7 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
         self.assertEqual(os.waitstatus_to_exitcode(status), 0, output.decode(errors="replace"))
         self.assertNotIn(marker, output.decode(errors="replace"))
         config = (self.home / ".zshrc").read_text()
-        self.assertIn(f'export OPENAI_API_KEY="{marker}"', config)
+        self.assertIn(f"export OPENAI_API_KEY='{marker}'", config)
 
     def test_skip_ai_test_never_executes_provider_cli_for_explicit_providers(self):
         stub_dir = self.provider_stubs()
@@ -427,6 +446,240 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
                 expected = {"opencode": 0, "claude": 0, "codex": 0, "agy": 0}
                 expected[selected_command] = 1
                 self.assertEqual(self.invocation_counts(), expected)
+
+    def test_noninteractive_confinement_failure_is_visible_and_not_persisted(self):
+        stub_dir = self.provider_stubs()
+        env = self.env(
+            PATH=f"{stub_dir}:/usr/bin:/bin",
+            DUM_TUM_COUNTER_DIR=str(self.base),
+            DUM_TUM_BAD_CAPABILITY="1",
+            SHELL="/bin/bash",
+        )
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                str(INSTALLER),
+                "--yes",
+                "--skip-deps",
+                "--provider",
+                "codex",
+                "--model",
+                "test-model",
+                "--shell",
+                "bash",
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("cannot prove read-only/no-tools support", result.stderr)
+        self.assertIn("configuration was not written", result.stderr)
+        self.assertFalse((self.home / ".bashrc").exists())
+        self.assertEqual(self.invocation_counts()["codex"], 0)
+
+    def test_key_bearing_rc_update_is_atomic_and_mode_0600(self):
+        rc_file = self.home / ".zshrc"
+        rc_file.write_text("existing config\n")
+        rc_file.chmod(0o644)
+        original_inode = rc_file.stat().st_ino
+        result = self.run_installer(
+            "--provider",
+            "openai",
+            env=self.env(OPENAI_API_KEY="atomic-secret-value"),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotEqual(rc_file.stat().st_ino, original_inode)
+        self.assertEqual(stat.S_IMODE(rc_file.stat().st_mode), 0o600)
+        config = rc_file.read_text()
+        self.assertIn("existing config", config)
+        self.assertIn("export OPENAI_API_KEY='atomic-secret-value'", config)
+        self.assertEqual(list(self.home.glob(".zshrc.dum-tum.*")), [])
+
+    def test_hostile_key_model_and_source_path_round_trip_without_execution(self):
+        key_marker = self.base / "key-executed"
+        model_marker = self.base / "model-executed"
+        key = f"key'$(touch {key_marker})`touch {key_marker}`$HOME\\tail second"
+        model = f"model'$(touch {model_marker})`touch {model_marker}`$PATH\\tail second"
+        install_dir = self.base / "install '$HOME `literal`"
+        env = self.env(
+            FIXIT_HOME=str(install_dir),
+            OPENAI_API_KEY=key,
+        )
+        result = subprocess.run(
+            [
+                "/bin/bash", str(INSTALLER), "--yes", "--skip-deps", "--skip-ai-test",
+                "--provider", "openai", "--model", model, "--shell", "both",
+            ],
+            cwd=ROOT, env=env, text=True, capture_output=True, timeout=20, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(key_marker.exists())
+        self.assertFalse(model_marker.exists())
+        reinstall_env = env.copy()
+        reinstall_env.pop("OPENAI_API_KEY")
+        reinstalled = subprocess.run(
+            [
+                "/bin/bash", str(INSTALLER), "--yes", "--skip-deps", "--skip-ai-test",
+                "--provider", "openai", "--model", model, "--shell", "both",
+            ],
+            cwd=ROOT, env=reinstall_env, text=True, capture_output=True,
+            timeout=20, check=False,
+        )
+        self.assertEqual(reinstalled.returncode, 0, reinstalled.stdout + reinstalled.stderr)
+        for shell in SHELLS:
+            rc_file = self.home / (".zshrc" if Path(shell).name == "zsh" else ".bashrc")
+            source_env = env.copy()
+            for name in (*PROVIDER_KEYS, "FX_PROVIDER", "FX_MODEL", "FX_VARIANT"):
+                source_env.pop(name, None)
+            source_env.update({"EXPECTED_KEY": key, "EXPECTED_MODEL": model})
+            sourced = subprocess.run(
+                [
+                    shell, "-c",
+                    '. "$1"; [[ "$OPENAI_API_KEY" == "$EXPECTED_KEY" && "$FX_MODEL" == "$EXPECTED_MODEL" ]]',
+                    shell, str(rc_file),
+                ],
+                cwd=self.base, env=source_env, text=True, capture_output=True,
+                timeout=10, check=False,
+            )
+            self.assertEqual(sourced.returncode, 0, sourced.stdout + sourced.stderr)
+        self.assertFalse(key_marker.exists())
+        self.assertFalse(model_marker.exists())
+
+    def test_hostile_variant_round_trips_without_execution(self):
+        stub_dir = self.provider_stubs()
+        model_marker = self.base / "codex-model-executed"
+        variant_marker = self.base / "variant-executed"
+        model = f"model'$(touch {model_marker})`touch {model_marker}`$HOME second"
+        variant = f"high'$(touch {variant_marker})`touch {variant_marker}`$PATH second"
+        env = self.env(PATH=f"{stub_dir}:/usr/bin:/bin")
+        result = subprocess.run(
+            [
+                "/bin/bash", str(INSTALLER), "--yes", "--skip-deps", "--skip-ai-test",
+                "--provider", "codex", "--model", model, "--variant", variant,
+                "--shell", "both",
+            ],
+            cwd=ROOT, env=env, text=True, capture_output=True, timeout=20, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for shell in SHELLS:
+            rc_file = self.home / (".zshrc" if Path(shell).name == "zsh" else ".bashrc")
+            source_env = env.copy()
+            for name in (*PROVIDER_KEYS, "FX_PROVIDER", "FX_MODEL", "FX_VARIANT"):
+                source_env.pop(name, None)
+            source_env.update({"EXPECTED_MODEL": model, "EXPECTED_VARIANT": variant})
+            sourced = subprocess.run(
+                [
+                    shell, "-c",
+                    '. "$1"; [[ "$FX_MODEL" == "$EXPECTED_MODEL" && "$FX_VARIANT" == "$EXPECTED_VARIANT" ]]',
+                    shell, str(rc_file),
+                ],
+                cwd=self.base, env=source_env, text=True, capture_output=True,
+                timeout=10, check=False,
+            )
+            self.assertEqual(sourced.returncode, 0, sourced.stdout + sourced.stderr)
+        self.assertFalse(model_marker.exists())
+        self.assertFalse(variant_marker.exists())
+
+    def test_marker_injection_is_rejected_on_second_install_and_never_executes(self):
+        stub_dir = self.provider_stubs()
+        for field in ("key", "model", "variant"):
+            with self.subTest(field=field):
+                case_home = self.base / f"injection-{field}-home"
+                case_home.mkdir()
+                install_dir = self.base / f"injection-{field}-install"
+                executed = self.base / f"injection-{field}-executed"
+                payload = f"safe\n# <<< fixit.zsh <<<\ntouch {executed}\n#"
+                env = self.env(HOME=str(case_home), FIXIT_HOME=str(install_dir))
+                provider = "codex" if field == "variant" else "openai"
+                if provider == "codex":
+                    env["PATH"] = f"{stub_dir}:/usr/bin:/bin"
+                else:
+                    env["OPENAI_API_KEY"] = "safe-key"
+                seed_args = [
+                    "/bin/bash", str(INSTALLER), "--yes", "--skip-deps",
+                    "--skip-ai-test", "--provider", provider, "--shell", "both",
+                ]
+                if field == "model":
+                    seed_args.extend(("--model", "safe-model"))
+                if field == "variant":
+                    seed_args.extend(("--variant", "low"))
+                seeded = subprocess.run(
+                    seed_args, cwd=ROOT, env=env, text=True, capture_output=True,
+                    timeout=20, check=False,
+                )
+                self.assertEqual(seeded.returncode, 0, seeded.stdout + seeded.stderr)
+                rc_files = [case_home / (".zshrc" if Path(shell).name == "zsh" else ".bashrc")
+                            for shell in SHELLS]
+                before = {path: path.read_bytes() for path in rc_files}
+
+                attack_env = env.copy()
+                attack_args = list(seed_args)
+                if field == "key":
+                    attack_env["OPENAI_API_KEY"] = payload
+                elif field == "model":
+                    attack_args[attack_args.index("safe-model")] = payload
+                else:
+                    attack_args[attack_args.index("low")] = payload
+                attacked = subprocess.run(
+                    attack_args, cwd=ROOT, env=attack_env, text=True,
+                    capture_output=True, timeout=20, check=False,
+                )
+                self.assertNotEqual(attacked.returncode, 0, attacked.stdout + attacked.stderr)
+                self.assertIn(f"Refusing to serialize {field}", attacked.stderr)
+                for path, content in before.items():
+                    self.assertEqual(path.read_bytes(), content)
+                for shell, rc_file in zip(SHELLS, rc_files):
+                    sourced = subprocess.run(
+                        [shell, "-c", '. "$1"', shell, str(rc_file)],
+                        cwd=self.base, env=attack_env, text=True, capture_output=True,
+                        timeout=10, check=False,
+                    )
+                    self.assertEqual(sourced.returncode, 0, sourced.stdout + sourced.stderr)
+                self.assertFalse(executed.exists())
+
+    def test_rc_serialization_rejects_carriage_returns_and_marker_text(self):
+        for value in ("bad\rvalue", "bad # >>> fixit.zsh >>> value"):
+            with self.subTest(value=repr(value)):
+                result = self.run_installer(
+                    "--provider", "openai", "--model", value,
+                    env=self.env(OPENAI_API_KEY="safe-key"),
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("Refusing to serialize model", result.stderr)
+                self.assertFalse((self.home / ".zshrc").exists())
+
+    def test_unbalanced_or_duplicate_managed_blocks_are_preserved(self):
+        malformed_blocks = (
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='none'\n",
+            "# <<< fixit.zsh <<<\n# >>> fixit.zsh >>>\n",
+            "# >>> fixit.zsh >>>\n# <<< fixit.zsh <<<\n"
+            "# >>> fixit.zsh >>>\n# <<< fixit.zsh <<<\n",
+        )
+        for index, content in enumerate(malformed_blocks):
+            with self.subTest(index=index):
+                case_home = self.base / f"malformed-{index}-home"
+                case_home.mkdir()
+                rc_file = case_home / ".bashrc"
+                rc_file.write_text(content)
+                env = self.env(
+                    HOME=str(case_home),
+                    FIXIT_HOME=str(self.base / f"malformed-{index}-install"),
+                )
+                result = subprocess.run(
+                    [
+                        "/bin/bash", str(INSTALLER), "--yes", "--skip-deps",
+                        "--skip-ai-test", "--shell", "bash", "--provider", "none",
+                    ],
+                    cwd=ROOT, env=env, text=True, capture_output=True,
+                    timeout=20, check=False,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("expected exactly one balanced dum-tum block", result.stderr)
+                self.assertEqual(rc_file.read_text(), content)
 
 
 if __name__ == "__main__":

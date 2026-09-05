@@ -69,6 +69,129 @@ class TestHeadOf(unittest.TestCase):
         self.assertEqual(fixit_ai.head_of("sudo "), "sudo")
 
 
+class TestRcExportValue(unittest.TestCase):
+    def test_reads_only_inside_single_complete_managed_block(self):
+        text = "\n".join(
+            (
+                "export FX_PROVIDER='before'",
+                "# >>> fixit.zsh >>>",
+                "export FX_PROVIDER='openai'",
+                "# <<< fixit.zsh <<<",
+                "export FX_PROVIDER='after'",
+            )
+        )
+        self.assertEqual(fixit_ai.rc_export_value(text, "FX_PROVIDER"), "openai")
+
+    def test_rejects_absent_unbalanced_reversed_and_duplicate_blocks(self):
+        cases = (
+            "export FX_PROVIDER='outside'\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n",
+            "export FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n",
+            "# <<< fixit.zsh <<<\nexport FX_PROVIDER='openai'\n# >>> fixit.zsh >>>\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# >>> fixit.zsh >>>\n# <<< fixit.zsh <<<\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n# <<< fixit.zsh <<<\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n# >>> fixit.zsh >>>\nexport FX_PROVIDER='anthropic'\n# <<< fixit.zsh <<<\n",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(fixit_ai.rc_export_value(text, "FX_PROVIDER"), "")
+
+    def test_does_not_read_export_after_end_marker(self):
+        text = "\n".join(
+            (
+                "# >>> fixit.zsh >>>",
+                "export FX_MODEL='inside'",
+                "# <<< fixit.zsh <<<",
+                "export OPENAI_API_KEY='after'",
+            )
+        )
+        self.assertEqual(fixit_ai.rc_export_value(text, "OPENAI_API_KEY"), "")
+
+
+class TestHelpOptions(unittest.TestCase):
+    def check(self, help_text, *options):
+        import io
+
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO(help_text)
+        try:
+            return fixit_ai.cmd_help_options(list(options))
+        finally:
+            sys.stdin = old_stdin
+
+    def test_real_option_declarations_and_values_are_accepted(self):
+        help_text = """Options:
+  -s, --sandbox <MODE>
+          Sandbox mode (possible values: read-only, workspace-write)
+      --ignore-user-config
+          Ignore user configuration
+      --ephemeral  Run without persistence
+"""
+        self.assertEqual(
+            self.check(
+                help_text,
+                "--sandbox=read-only",
+                "--ignore-user-config",
+                "--ephemeral",
+            ),
+            0,
+        )
+
+    def test_indented_description_examples_are_not_declarations(self):
+        help_text = """Options:
+  --legacy <TEXT>  Deprecated; old examples include:
+      --sandbox read-only
+      --ignore-user-config
+      --ignore-rules
+      --ephemeral
+"""
+        self.assertEqual(
+            self.check(
+                help_text,
+                "--sandbox=read-only",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--ephemeral",
+            ),
+            1,
+        )
+
+    def test_nested_option_value_does_not_apply_to_preceding_option(self):
+        help_text = """Options:
+  --sandbox <MODE>
+    --legacy <MODE>  choices: read-only
+  --ignore-user-config
+  --ignore-rules
+  --ephemeral
+"""
+        self.assertEqual(
+            self.check(
+                help_text,
+                "--sandbox=read-only",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--ephemeral",
+            ),
+            1,
+        )
+
+    def test_space_separated_option_mentions_are_not_alias_declarations(self):
+        self.assertEqual(self.check("--pure --format\n", "--pure", "--format"), 1)
+
+    def test_example_section_is_not_an_option_section(self):
+        help_text = """Examples:
+  --sandbox
+  --mode <MODE>  plan
+  --disable-slash-commands
+"""
+        self.assertEqual(
+            self.check(
+                help_text, "--sandbox", "--mode=plan", "--disable-slash-commands"
+            ),
+            1,
+        )
+
+
 class TestSecretRedaction(unittest.TestCase):
     def test_positive_matrix(self):
         cases = (

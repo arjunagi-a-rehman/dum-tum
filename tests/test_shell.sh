@@ -272,6 +272,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   printf '#!/bin/sh\n[ "$1" = "-p" ] && [ "$2" = "/usage" ]\n' > bin/agy
   chmod +x bin/agy
@@ -282,6 +283,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   printf '#!/bin/sh\nexit 1\n' > bin/agy
   chmod +x bin/agy
@@ -292,6 +294,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   rm -f "$TMPD/agy-ready-marker"
   printf '%s\n' '#!/bin/sh' \
@@ -311,6 +314,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   printf '#!/bin/sh\nexit 1\n' > bin/agy
   chmod +x bin/agy
@@ -324,6 +328,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p emptybin
   PATH="$TMPD/emptybin:/usr/bin:/bin"
   unset _FX_ANTIGRAVITY_READY
@@ -333,13 +338,17 @@ if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 out=$(
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   printf '%s\n' '#!/usr/bin/env bash' \
     '[[ "$PWD" != "$FX_TEST_ORIGINAL_CWD" ]] || exit 1' \
     '[[ "$1" == "--input-format" && "$2" == "stream-json" ]] || exit 1' \
     '[[ "$3" == "--output-format" && "$4" == "stream-json" ]] || exit 1' \
-    '[[ "$5" == "--model" && "$6" == "test-model" ]] || exit 1' \
-    '[[ "$7" == "--effort" && "$8" == "high" ]] || exit 1' \
-    '[[ "$#" == 8 ]] || exit 1' \
+    '[[ "$5" == "--sandbox" ]] || exit 1' \
+    '[[ "$6" == "--mode" && "$7" == "plan" ]] || exit 1' \
+    '[[ "$8" == "--disable-slash-commands" ]] || exit 1' \
+    '[[ "$9" == "--model" && "${10}" == "test-model" ]] || exit 1' \
+    '[[ "${11}" == "--effort" && "${12}" == "high" ]] || exit 1' \
+    '[[ "$#" == 12 ]] || exit 1' \
     'IFS= read -r payload' \
     '[[ "$payload" == *"Task/failed input: list files"* ]] || exit 1' \
     "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ls -la\\n\"}}'" > bin/agy
@@ -370,7 +379,7 @@ if [[ ! -e "$TMPD/agy-installer-marker" ]]; then
 else
   bad "installer skip-ai-test leaves antigravity uninvoked"
 fi
-if grep -q 'export FX_PROVIDER="antigravity"' "$TMPD/install-home/.zshrc" 2>/dev/null; then
+if grep -q "export FX_PROVIDER='antigravity'" "$TMPD/install-home/.zshrc" 2>/dev/null; then
   ok "installer skip-ai-test writes antigravity config"
 else
   bad "installer skip-ai-test writes antigravity config"
