@@ -3,7 +3,8 @@
 
 Usage:
     fixit-ai.py extract KIND    # stdin: provider output -> one command on stdout
-    fixit-ai.py body            # env FX_SYS, FX_USER, FX_MODEL -> OpenAI-compatible JSON body
+    fixit-ai.py body-openrouter # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body
+    fixit-ai.py body-openai     # env FX_SYS, FX_USER, FX_MODEL -> OpenAI JSON body
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
     fixit-ai.py body-gemini     # env FX_SYS, FX_USER -> Gemini generateContent JSON body
     fixit-ai.py body-antigravity # stdin prompt -> Antigravity stream-json user event
@@ -285,15 +286,23 @@ def cmd_extract(provider: str = "plain") -> None:
         print(out)
 
 
-def cmd_body() -> None:
-    print(json.dumps({
+def _chat_body(token_field: str) -> dict:
+    return {
         "model": os.environ["FX_MODEL"],
-        "max_tokens": 800,
+        token_field: 800,
         "messages": [
             {"role": "system", "content": os.environ["FX_SYS"]},
             {"role": "user", "content": os.environ["FX_USER"]},
         ],
-    }))
+    }
+
+
+def cmd_body_openrouter() -> None:
+    print(json.dumps(_chat_body("max_tokens")))
+
+
+def cmd_body_openai() -> None:
+    print(json.dumps(_chat_body("max_completion_tokens")))
 
 
 def cmd_body_anthropic() -> None:
@@ -368,8 +377,10 @@ def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
     if mode == "proj":
         cmd_proj()
-    elif mode == "body":
-        cmd_body()
+    elif mode in ("body", "body-openrouter"):
+        cmd_body_openrouter()
+    elif mode == "body-openai":
+        cmd_body_openai()
     elif mode == "body-anthropic":
         cmd_body_anthropic()
     elif mode == "body-gemini":
