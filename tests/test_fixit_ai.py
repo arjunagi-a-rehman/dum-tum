@@ -14,6 +14,21 @@ fixit_ai = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixit_ai)
 
 
+class SecretReviewTest(unittest.TestCase):
+    def test_qualified_names(self):
+        for name in ("GITHUB_TOKEN_PROD", "OPENAI_API_KEY_BACKUP", "MY_SECRET_VALUE"):
+            self.assertNotIn("sensitive-value", fixit_ai.redact_secrets(name + "=sensitive-value"))
+
+    def test_parameterized_auth(self):
+        for scheme in ("AWS4-HMAC-SHA256", "Digest"):
+            value = 'curl -H "Authorization: ' + scheme + ' Credential=private, Signature=signed-secret"'
+            self.assertNotIn("signed-secret", fixit_ai.redact_secrets(value))
+
+    def test_script_names(self):
+        for value in ("npm run secret:scan", "make token:refresh"):
+            self.assertEqual(value, fixit_ai.redact_secrets(value))
+
+
 class TestHeadOf(unittest.TestCase):
     def test_plain_command(self):
         self.assertEqual(fixit_ai.head_of("ls -la"), "ls")
@@ -129,6 +144,16 @@ class TestSecretRedaction(unittest.TestCase):
 
 
 class TestExtract(unittest.TestCase):
+    def test_outer_quotes_and_literal_argument(self):
+        self.assertEqual(fixit_ai.extract('"ls -la"'), 'ls -la')
+        self.assertEqual(fixit_ai.extract("ls 'file name'"), "ls 'file name'")
+
+    def test_shell_supplied_names(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"FX_COMMAND_NAMES": "my_alias\nmy_function"}):
+            self.assertEqual(fixit_ai.extract("my_alias status"), "my_alias status")
+            self.assertEqual(fixit_ai.extract("my_function argument"), "my_function argument")
+
     def test_simple_command(self):
         self.assertEqual(fixit_ai.extract("ls -la"), "ls -la")
 
