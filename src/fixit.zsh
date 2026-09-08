@@ -111,6 +111,11 @@ dum_tum_reload() {
   source "$adapter"
 }
 
+if [[ -o interactive && -n "${_FX_ZSH_SAVED_WIDGET:-}" &&
+      "${widgets[$_FX_ZSH_SAVED_WIDGET]-}" == user:_fx_accept_line ]]; then
+  zle -A .accept-line "$_FX_ZSH_SAVED_WIDGET"
+fi
+
 if [[ -o interactive && "${_FX_ZSH_LOADED:-0}" != 1 ]]; then
   autoload -Uz add-zsh-hook
   add-zsh-hook -d preexec _fx_preexec 2>/dev/null
@@ -119,7 +124,11 @@ if [[ -o interactive && "${_FX_ZSH_LOADED:-0}" != 1 ]]; then
   add-zsh-hook precmd _fx_precmd
   _FX_ZSH_WIDGET_COUNTER=$((${_FX_ZSH_WIDGET_COUNTER:-0} + 1))
   _FX_ZSH_SAVED_WIDGET="_dum_tum_saved_accept_line_$$_$_FX_ZSH_WIDGET_COUNTER"
-  zle -A accept-line "$_FX_ZSH_SAVED_WIDGET"
+  if [[ "${widgets[accept-line]-}" == user:_fx_accept_line ]]; then
+    zle -A .accept-line "$_FX_ZSH_SAVED_WIDGET"
+  else
+    zle -A accept-line "$_FX_ZSH_SAVED_WIDGET"
+  fi
   zle -N accept-line _fx_accept_line
   _FX_ZSH_LOADED=1
 fi
