@@ -97,13 +97,15 @@ exec zsh          # or: exec bash
 ```bash
 ./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
 ./install.sh --yes --provider antigravity
-./install.sh --yes --provider openrouter --key sk-or-v1-...
-./install.sh --yes --provider openai --key sk-...
-./install.sh --yes --provider anthropic --key sk-ant-...
-./install.sh --yes --provider gemini --key AIza...
+./install.sh --yes --provider openrouter
+./install.sh --yes --provider openai
+./install.sh --yes --provider anthropic
+./install.sh --yes --provider gemini
 ./install.sh --yes --provider none          # local typo fixing only
 ./install.sh --uninstall
 ```
+
+For a key-based non-interactive install, provide only the environment variable matching the selected provider: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` (`GOOGLE_API_KEY` is also accepted for Gemini). The removed `--key` option is rejected because command-line values are exposed in shell history and process arguments. To enter a key without echoing it, omit `--yes` and run with the provider only, such as `./install.sh --provider openai`; the installer uses a hidden terminal prompt.
 
 Requires `python3`, `curl`, and either zsh or Bash 4+.
 
@@ -124,7 +126,7 @@ This tool runs things in your shell. That deserves a straight answer about what 
 - **Failed-command AI can be disabled.** Eligible failed `git`/`npm`/`docker` and similar commands are sent automatically when `FX_AI_ON_FAIL=1` and AI is configured. Set `FX_AI_ON_FAIL=0` if you only want explicit natural-language requests sent.
 - **Known secret shapes are blocked or redacted** before AI calls. This includes quoted or spaced secret assignments, password/token/API-key flags and labels, authorization and API-key headers, credentials embedded in URLs, and high-confidence provider-key formats such as `sk-…`, GitHub, AWS, Google, Slack, and GitLab tokens.
 - **Local mode is fully offline.** Nothing leaves your machine, period.
-- **Keys don't hit the process table.** API keys and request bodies go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
+- **Keys aren't passed as process arguments.** The installer accepts them through a hidden prompt or provider-specific environment variable, and HTTP credentials and request bodies reach `curl` through stdin rather than argv. As with any environment-based secret, another process with sufficient permission may still inspect the environment. Your rc file is `chmod 600` after install.
 
 One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. The `claude` and `antigravity` providers send the prompt via stdin, so it is not `ps`-visible. Antigravity runs in an isolated temporary workspace so it cannot change project files before dum-tum shows the confirmation prompt.
 

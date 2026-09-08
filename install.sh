@@ -4,7 +4,6 @@
 #   curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 #   npx github:arjunagi-a-rehman/dum-tum
 #   ./install.sh
-#   ./install.sh --key sk-or-v1-...
 #   ./install.sh --provider opencode --model anthropic/claude-sonnet-4
 #   ./install.sh --uninstall
 set -euo pipefail
@@ -19,14 +18,13 @@ MARKER_END="# <<< fixit.zsh <<<"
 SELF="${BASH_SOURCE[0]:-$0}"
 SELF_DIR="$(cd "$(dirname "$SELF")" 2>/dev/null && pwd || true)"
 
-# Values from CLI flags only (env is a non-interactive fallback — does not skip menus)
 API_KEY=""
+API_KEY_PROVIDER=""
 PROVIDER=""
 MODEL=""
 VARIANT=""
 PROVIDER_FROM_CLI=0
 MODEL_FROM_CLI=0
-KEY_FROM_CLI=0
 VARIANT_FROM_CLI=0
 ASSUME_YES=0
 SKIP_DEPS=0
@@ -53,7 +51,6 @@ Options:
   --provider NAME   openrouter | openai | anthropic | gemini | opencode | claude | codex | antigravity | none
   --model ID        Model id for the chosen provider
   --variant LEVEL   Reasoning effort (CLI providers: low|medium|high|...)
-  --key KEY         API key for key-based providers (openrouter/openai/anthropic/gemini)
   --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
@@ -62,10 +59,10 @@ Options:
   --help, -h        Show this help
 
 Env (used when --yes / non-interactive; interactive always prompts):
-  OPENROUTER_API_KEY   Same as --key (provider=openrouter)
-  OPENAI_API_KEY       Same as --key (provider=openai)
-  ANTHROPIC_API_KEY    Same as --key (provider=anthropic)
-  GEMINI_API_KEY       Same as --key (provider=gemini; GOOGLE_API_KEY also works)
+  OPENROUTER_API_KEY   Used only when provider=openrouter
+  OPENAI_API_KEY       Used only when provider=openai
+  ANTHROPIC_API_KEY    Used only when provider=anthropic
+  GEMINI_API_KEY       Used only when provider=gemini; GOOGLE_API_KEY is a fallback
   FX_PROVIDER          Same as --provider
   FX_MODEL             Same as --model
   FX_VARIANT           Same as --variant
@@ -76,8 +73,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --key) API_KEY="${2:-}"; KEY_FROM_CLI=1; shift 2 ;;
-    --key=*) API_KEY="${1#--key=}"; KEY_FROM_CLI=1; shift ;;
+    --key|--key=*)
+      echo "The --key option is not supported because command-line secrets are process-visible." >&2
+      echo "Use the matching provider environment variable or the installer's hidden prompt." >&2
+      exit 1
+      ;;
     --provider) PROVIDER="${2:-}"; PROVIDER_FROM_CLI=1; shift 2 ;;
     --provider=*) PROVIDER="${1#--provider=}"; PROVIDER_FROM_CLI=1; shift ;;
     --model) MODEL="${2:-}"; MODEL_FROM_CLI=1; shift 2 ;;
@@ -106,24 +106,19 @@ key_var_for_provider() {
   esac
 }
 
-# Pick up an API key from the environment; records which var it came from
-detect_key_env() {
+load_key_for_provider() {
   API_KEY=""
-  KEY_ENV_VAR=""
-  local kv
-  for kv in OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY; do
-    if [[ -n "${!kv:-}" ]]; then
-      API_KEY="${!kv}"
-      KEY_ENV_VAR="$kv"
-      return 0
-    fi
-  done
+  API_KEY_PROVIDER=""
+  case "${1:-}" in
+    openrouter) API_KEY="${OPENROUTER_API_KEY:-}" ;;
+    openai)     API_KEY="${OPENAI_API_KEY:-}" ;;
+    anthropic)  API_KEY="${ANTHROPIC_API_KEY:-}" ;;
+    gemini)     API_KEY="${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ;;
+  esac
+  [[ -n "$API_KEY" ]] && API_KEY_PROVIDER="${1:-}"
+  return 0
 }
 
-# Env fills gaps only when not set by CLI
-if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
-  detect_key_env
-fi
 if [[ "$PROVIDER_FROM_CLI" -eq 0 && -n "${FX_PROVIDER:-}" ]]; then
   PROVIDER="$FX_PROVIDER"
 fi
@@ -160,6 +155,13 @@ read_tty() {
   else
     IFS= read -r _val || true
   fi
+  _val="${_val//$'\r'/}"
+  printf -v "$_var" '%s' "$_val"
+}
+
+read_tty_secret() {
+  local _var="$1" _prompt="${2:-}" _val=""
+  _val="$(python3 -c 'import getpass, sys; print(getpass.getpass(sys.argv[1]))' "$_prompt")" || return 1
   _val="${_val//$'\r'/}"
   printf -v "$_var" '%s' "$_val"
 }
@@ -314,9 +316,41 @@ normalize_provider() {
   esac
 }
 
+provider_from_key_env() {
+  local found="" count=0
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then found="openrouter"; count=$((count+1)); fi
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then found="openai"; count=$((count+1)); fi
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then found="anthropic"; count=$((count+1)); fi
+  if [[ -n "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]]; then found="gemini"; count=$((count+1)); fi
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s' "$found"
+    return 0
+  fi
+  [[ "$count" -eq 0 ]] && return 1
+  return 2
+}
+
+read_rc_key() {
+  local key_var="$1"
+  grep -E "^\s*export ${key_var}=" "$ZSHRC" 2>/dev/null | tail -1 | \
+    sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//" || true
+}
+
+load_key_from_rc_for_provider() {
+  local key_var
+  key_var="$(key_var_for_provider "$PROVIDER")"
+  [[ -n "$key_var" && -f "$ZSHRC" ]] || return 0
+  API_KEY="$(read_rc_key "$key_var")"
+  if [[ "$PROVIDER" == "gemini" && -z "$API_KEY" ]]; then
+    API_KEY="$(read_rc_key GOOGLE_API_KEY)"
+  fi
+  [[ -n "$API_KEY" ]] && API_KEY_PROVIDER="$PROVIDER"
+  return 0
+}
+
 # ---------- provider selection ----------
 select_provider() {
-  local p
+  local p env_provider env_status
   # Explicit CLI --provider always wins (interactive or not)
   if [[ "$PROVIDER_FROM_CLI" -eq 1 ]]; then
     p="$(normalize_provider "$PROVIDER")"
@@ -336,6 +370,7 @@ select_provider() {
       ok "Provider: $PROVIDER"
       return 0
     fi
+    PROVIDER=""
     if [[ -f "$ZSHRC" ]] && grep -qE '^\s*export FX_PROVIDER=' "$ZSHRC" 2>/dev/null; then
       local existing
       existing="$(grep -E '^\s*export FX_PROVIDER=' "$ZSHRC" | tail -1 | sed -E 's/.*FX_PROVIDER=//; s/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
@@ -346,13 +381,17 @@ select_provider() {
         return 0
       fi
     fi
-    if [[ -n "$API_KEY" ]]; then
-      case "${KEY_ENV_VAR:-OPENROUTER_API_KEY}" in
-        OPENAI_API_KEY)                  PROVIDER="openai" ;;
-        ANTHROPIC_API_KEY)               PROVIDER="anthropic" ;;
-        GEMINI_API_KEY|GOOGLE_API_KEY)   PROVIDER="gemini" ;;
-        *)                               PROVIDER="openrouter" ;;
-      esac
+    if env_provider="$(provider_from_key_env)"; then
+      PROVIDER="$env_provider"
+    else
+      env_status=$?
+      if [[ "$env_status" -eq 2 ]]; then
+        err "Multiple provider API keys are set; choose one with --provider or FX_PROVIDER."
+        exit 1
+      fi
+    fi
+    if [[ -n "$PROVIDER" ]]; then
+      :
     elif [[ "$HAVE_OPENCODE" -eq 1 ]]; then
       PROVIDER="opencode"
     elif [[ "$HAVE_CLAUDE" -eq 1 ]]; then
@@ -444,8 +483,11 @@ select_provider() {
 # ---------- API key (openrouter/openai/anthropic/gemini) ----------
 maybe_ask_key() {
   local key_var
+  API_KEY=""
+  API_KEY_PROVIDER=""
   key_var="$(key_var_for_provider "$PROVIDER")"
   [[ -n "$key_var" ]] || return 0
+  load_key_for_provider "$PROVIDER"
 
   local label key_url
   case "$PROVIDER" in
@@ -455,16 +497,8 @@ maybe_ask_key() {
     gemini)     label="Google Gemini"; key_url="https://aistudio.google.com/apikey" ;;
   esac
 
-  # Explicit --key wins
-  if [[ "$KEY_FROM_CLI" -eq 1 && -n "$API_KEY" ]]; then
-    ok "$label API key provided (from --key)"
-    return 0
-  fi
-
   if ! is_interactive; then
-    if [[ -z "$API_KEY" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
-      API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
-    fi
+    [[ -n "$API_KEY" ]] || load_key_from_rc_for_provider
     if [[ -n "$API_KEY" ]]; then
       ok "$label API key provided"
       return 0
@@ -478,18 +512,21 @@ maybe_ask_key() {
   [[ -n "$API_KEY" ]] && hint="(env key detected — Enter keeps it, or paste a new one)"
   if [[ -z "$hint" ]] && grep -qE "^\s*export ${key_var}=.+" "$ZSHRC" 2>/dev/null; then
     hint="(key already in zshrc — Enter keeps it, or paste a new one)"
-    API_KEY="$(grep -E "^\s*export ${key_var}=" "$ZSHRC" | tail -1 | sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//")"
+    load_key_from_rc_for_provider
+  elif [[ -z "$hint" && "$PROVIDER" == "gemini" ]] && grep -qE '^\s*export GOOGLE_API_KEY=.+' "$ZSHRC" 2>/dev/null; then
+    hint="(Google API key already in zshrc — Enter keeps it, or paste a new one)"
+    load_key_from_rc_for_provider
   fi
 
   echo ""
   echo "$label API key enables natural language."
   echo "Get one at: $key_url"
   [[ -n "$hint" ]] && echo "  $hint"
-  printf "Paste key now (Enter = keep/skip): "
   local typed=""
-  read_tty typed
+  read_tty_secret typed "Paste key now (Enter = keep/skip): "
   if [[ -n "$typed" ]]; then
     API_KEY="$typed"
+    API_KEY_PROVIDER="$PROVIDER"
     ok "API key saved for config"
   elif [[ -n "$API_KEY" ]]; then
     ok "Keeping existing $label API key"
@@ -825,7 +862,7 @@ test_ai() {
 
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
-  if [[ -n "$key_var" && -z "$API_KEY" ]]; then
+  if [[ -n "$key_var" && ( -z "$API_KEY" || "$API_KEY_PROVIDER" != "$PROVIDER" ) ]]; then
     warn "Skipping AI test (no API key)"
     return 0
   fi
@@ -852,14 +889,16 @@ test_ai() {
   # background + watchdog: CLI backends can queue for a long time
   local tmpout pid waited=0 limit=120
   tmpout="$(mktemp)"
-  local -a envargs=()
-  [[ -n "$key_var" ]] && envargs+=("${key_var}=${API_KEY}")
   (
+    unset OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+    if [[ -n "$key_var" ]]; then
+      printf -v "$key_var" '%s' "$API_KEY"
+      export "${key_var?}"
+    fi
     FX_PROVIDER="$PROVIDER" \
     FX_MODEL="$MODEL" \
     FX_VARIANT="$VARIANT" \
     FX_AI_TIMEOUT=100 \
-    env "${envargs[@]}" \
     "$test_shell" -c '
       source "$1"
       _fx_ai "print only this exact shell command on one line: ls -la"
@@ -909,7 +948,6 @@ test_ai() {
     2)
       PROVIDER=""
       MODEL=""
-      detect_key_env
       select_provider
       maybe_ask_key
       select_model
@@ -958,7 +996,7 @@ write_rc_block() {
     anthropic)  key_placeholder="sk-ant-..." ;;
     gemini)     key_placeholder="AIza..." ;;
   esac
-  if [[ -n "$key_var" && -n "$API_KEY" ]]; then
+  if [[ -n "$key_var" && -n "$API_KEY" && "$API_KEY_PROVIDER" == "$PROVIDER" ]]; then
     local esc="${API_KEY//\\/\\\\}"
     esc="${esc//\"/\\\"}"
     key_line="export ${key_var}=\"$esc\""
