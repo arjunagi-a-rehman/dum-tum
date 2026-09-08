@@ -240,6 +240,7 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
         fake_bash = fake_bin / "bash"
         fake_bash.write_text(
             "#!/bin/sh\n"
+            "if [ \"${1:-}\" = -n ]; then exec /bin/bash \"$@\"; fi\n"
             "printf '%s\\n' \"$@\" > \"$DUM_TUM_ARG_LOG\"\n"
             "printf 'openai=%s\\nopenrouter=%s\\n' \"${OPENAI_API_KEY-unset}\" "
             "\"${OPENROUTER_API_KEY-unset}\" > \"$DUM_TUM_ENV_LOG\"\n"
