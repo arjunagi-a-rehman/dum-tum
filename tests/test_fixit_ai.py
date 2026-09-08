@@ -44,6 +44,76 @@ class TestHeadOf(unittest.TestCase):
         self.assertEqual(fixit_ai.head_of("sudo "), "sudo")
 
 
+class TestRepairFailedLine(unittest.TestCase):
+    def test_repaired_filename_is_one_literal_argument(self):
+        import shlex
+        for name in ("document file.txt", "document*.txt", "document'file.txt", 'document$HOME.txt'):
+            original = name.replace(" ", "").replace("*", "").replace("'", "").replace("$", "")
+            result = fixit_ai.repair_failed_line("cat " + original, ["cat"], candidates=[name])
+            self.assertEqual(result[0], "edit")
+            self.assertEqual(shlex.split(result[3]), ["cat", original])
+
+    def test_preserves_shell_syntax_around_repaired_span(self):
+        raw = 'cat "dcoument.txt" | wc -c > "$OUT" && printf "$KEEP"'
+        repaired = fixit_ai.repair_failed_line(raw, ["cat"], ["document.txt"])
+        self.assertEqual(
+            repaired,
+            (
+                "run",
+                "dcoument.txt",
+                "document.txt",
+                'cat "document.txt" | wc -c > "$OUT" && printf "$KEEP"',
+            ),
+        )
+
+    def test_preserves_single_quotes(self):
+        raw = "cat 'dcoument.txt' || printf failed"
+        repaired = fixit_ai.repair_failed_line(raw, ["cat"], ["document.txt"])
+        self.assertEqual(repaired[3], "cat 'document.txt' || printf failed")
+
+    def test_simple_line_uses_argv_execution(self):
+        repaired = fixit_ai.repair_failed_line("cat dcoument.txt", ["cat"], ["document.txt"])
+        self.assertEqual(repaired, ("argv", "dcoument.txt", "document.txt", "cat document.txt"))
+
+    def test_assignment_and_tilde_keep_shell_execution(self):
+        raw = "MODE=test cat dcoument.txt ~/archive"
+        repaired = fixit_ai.repair_failed_line(raw, ["cat"], ["document.txt"])
+        self.assertEqual(repaired, ("run", "dcoument.txt", "document.txt", "MODE=test cat document.txt ~/archive"))
+
+    def test_escaped_word_requires_editing(self):
+        raw = r"cat dcoument\ file.txt"
+        repaired = fixit_ai.repair_failed_line(raw, ["cat"], ["document file.txt"])
+        self.assertEqual(repaired, ("edit", "dcoument file.txt", "document file.txt", raw))
+
+    def test_complex_repair_does_not_insert_untrusted_filename_syntax(self):
+        candidates = (
+            ("target", "tar;get"),
+            ("tar(x)get", "tar$(x)get"),
+            ("target", "tar`get"),
+            ("target", "tar get"),
+            ("target", "tar'get"),
+            ("target", 'tar"get'),
+            ("target", "tar*get"),
+            ("target", "tar?get"),
+            ("target", "tar[get"),
+        )
+        for operator in ("| wc -c", "> output"):
+            for typo, candidate in candidates:
+                raw = f"cat '{typo}' {operator}"
+                with self.subTest(operator=operator, candidate=candidate):
+                    self.assertEqual(
+                        fixit_ai.repair_failed_line(raw, ["cat"], [candidate]),
+                        ("edit", typo, candidate, raw),
+                    )
+
+    def test_does_not_repair_inside_expansion(self):
+        raw = 'cat "$DIR/dcoument.txt"'
+        self.assertIsNone(fixit_ai.repair_failed_line(raw, ["cat"], ["document.txt"]))
+
+    def test_rejects_non_safe_command(self):
+        self.assertIsNone(fixit_ai.repair_failed_line("rm dcoument.txt", ["cat"], ["document.txt"]))
+
+
 class TestExtract(unittest.TestCase):
     def test_simple_command(self):
         self.assertEqual(fixit_ai.extract("ls -la"), "ls -la")

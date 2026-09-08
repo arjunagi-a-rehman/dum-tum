@@ -31,6 +31,13 @@ check_rc() { # $1=desc $2=expected rc $3...=cmd
   if [[ "$got" == "$want" ]]; then ok "$desc"; else bad "$desc (expected rc $want, got $got)"; fi
 }
 
+finish_tests() {
+  PASS="$(grep -c '^pass$' "$RESULTS" || true)"
+  FAIL="$(grep -c '^fail$' "$RESULTS" || true)"
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+  (( FAIL == 0 ))
+}
+
 case "${FX_TEST_HARNESS_MODE:-}" in
   assertion) (check_eq "forced provider failure" expected actual); exit $? ;;
   abort) (set -u; unset FX_TEST_UNSET; printf '%s' "$FX_TEST_UNSET"); exit $? ;;
@@ -80,6 +87,24 @@ check_rc "_fx_looks_like_nl flag" 1 _fx_looks_like_nl list -la
 check_rc "_fx_looks_like_nl path" 1 _fx_looks_like_nl list ./foo
 touch realfile
 check_rc "_fx_looks_like_nl existing file" 1 _fx_looks_like_nl show realfile
+
+quote_marker="$TMPD/quote-injected"
+out=$(_fx_quote_argv cmd "a b" "x;y" "\$(touch $quote_marker)" '*' '' "single'quote" 'double"quote' 'back\slash')
+eval "set -- $out"
+check_eq "_fx_quote_argv preserves argument count" 9 "$#"
+check_eq "_fx_quote_argv preserves spaces" "a b" "$2"
+check_eq "_fx_quote_argv preserves semicolons" "x;y" "$3"
+check_eq "_fx_quote_argv preserves substitutions as data" "\$(touch $quote_marker)" "$4"
+check_eq "_fx_quote_argv preserves globs" '*' "$5"
+check_eq "_fx_quote_argv preserves empty arguments" '' "$6"
+check_eq "_fx_quote_argv preserves single quotes" "single'quote" "$7"
+check_eq "_fx_quote_argv preserves double quotes" 'double"quote' "$8"
+check_eq "_fx_quote_argv preserves backslashes" 'back\slash' "$9"
+if [[ ! -e "$quote_marker" ]]; then
+  ok "_fx_quote_argv does not activate substitutions"
+else
+  bad "_fx_quote_argv does not activate substitutions"
+fi
 
 # ---------- _fx_has_secrets ----------
 check_rc "_fx_has_secrets --password" 0 _fx_has_secrets 'curl --password=hunter2 x'
@@ -135,6 +160,10 @@ check_eq "keeps tab and newline" $'a\tb' "$out"
 )
 rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
+if [[ "${FX_TEST_FORCE_PROVIDER_FAILURE:-0}" -eq 1 ]]; then
+  finish_tests
+  exit $?
+fi
 (
   FX_PROVIDER=openrouter
   unset OPENROUTER_API_KEY
@@ -376,7 +405,34 @@ case "$out" in
   *) bad "sys prompt mentions DANGER prefix" ;;
 esac
 
-PASS="$(grep -c '^pass$' "$RESULTS" || true)"
-FAIL="$(grep -c '^fail$' "$RESULTS" || true)"
-printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
-(( FAIL == 0 ))
+out="$(bash -uc 'source "$1"; fix' bash "$ROOT/src/fixit.bash")"
+check_eq "bash nounset fix before failure" "nothing failed recently" "$out"
+
+out="$(bash -uc '
+  source "$1"
+  FX_AI_ON_FAIL=0
+  _fx_ai_resolve() { printf "resolved: %s\n" "$*"; }
+  _fx_preexec false
+  false
+  _fx_precmd
+  fix
+' bash "$ROOT/src/fixit.bash")"
+check_eq "bash nounset fix after failure" \
+  "resolved: fix this failed command: false (exit 1)" "$out"
+
+out="$(ZDOTDIR="$TMPD" zsh -fuc 'source "$1"; fix' zsh "$ROOT/src/fixit.zsh" 2>/dev/null)"
+check_eq "zsh nounset fix before failure" "nothing failed recently" "$out"
+
+out="$(ZDOTDIR="$TMPD" zsh -fuc '
+  source "$1"
+  FX_AI_ON_FAIL=0
+  _fx_ai_resolve() { printf "resolved: %s\n" "$*"; }
+  _fx_preexec false
+  false
+  _fx_precmd
+  fix
+' zsh "$ROOT/src/fixit.zsh" 2>/dev/null)"
+check_eq "zsh nounset fix after failure" \
+  "resolved: fix this failed command: false (exit 1)" "$out"
+
+finish_tests

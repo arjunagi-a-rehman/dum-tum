@@ -23,7 +23,15 @@ for mode in assertion abort; do
     exit 1
   fi
 done
+if FX_TEST_FORCE_PROVIDER_FAILURE=1 bash tests/test_shell.sh >/dev/null 2>&1; then
+  err "Shell provider failure propagation self-test unexpectedly passed"
+  exit 1
+fi
 ok "Shell failure propagation self-test passed"
+
+info "Installer tests"
+bash tests/test_installer.sh
+ok "Installer tests passed"
 
 info "Shell syntax checks"
 for script in install.sh src/fixit-common.sh src/fixit.bash; do
@@ -45,7 +53,7 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   exit 1
 fi
 info "shellcheck"
-shellcheck -S warning install.sh src/fixit-common.sh src/fixit.bash
+shellcheck -S warning install.sh src/fixit-common.sh src/fixit.bash tests/test_installer.sh
 ok "shellcheck clean"
 
 ok "All tests passed"
