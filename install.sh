@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fixit.zsh installer — macOS + Ubuntu/Debian Linux
+# dum-tum installer — macOS + Ubuntu/Debian Linux
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 #   npx github:arjunagi-a-rehman/dum-tum
@@ -94,7 +94,7 @@ TX_PENDING_SIGNAL=0
 
 usage() {
   cat <<'EOF'
-fixit.zsh installer (macOS + Ubuntu/Linux)
+dum-tum installer (macOS + Ubuntu/Linux)
 
 Usage:
   ./install.sh [options]
@@ -108,7 +108,7 @@ Options:
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
   --skip-ai-test    Skip provider execution, auth checks, and network smoke tests
-  --uninstall       Remove fixit from ~/.zshrc and ~/.bashrc
+  --uninstall       Remove dum-tum from ~/.zshrc and ~/.bashrc
   --help, -h        Show this help
 
 Env (used when --yes / non-interactive; interactive always prompts):
@@ -1995,7 +1995,7 @@ ensure_shell_default() {
   fi
 
   if [[ "$DO_BASH" -eq 1 && "$shell_now" != "bash" ]]; then
-    warn "fixit for bash is configured in $BASHRC — it loads when you run bash."
+    warn "dum-tum for Bash is configured in $BASHRC — it loads when you run Bash."
   fi
 }
 
@@ -2022,7 +2022,7 @@ print_next_steps() {
   cat <<EOF
 
 ┌─────────────────────────────────────────────────────────┐
-│  fixit installed on $OS_NAME
+│  dum-tum installed on $OS_NAME
 │  Scripts:  $INSTALL_DIR$cfg_lines
 │  AI:       $ai_hint
 └─────────────────────────────────────────────────────────┘
@@ -2244,7 +2244,7 @@ complete_uninstall_transaction() {
 }
 
 uninstall_fixit() {
-  info "Uninstalling fixit…"
+  info "Uninstalling dum-tum…"
   local removed=0 rc=0
 
   validate_uninstall_target || return 1
@@ -2272,7 +2272,7 @@ uninstall_fixit() {
   if [[ "$removed" -eq 0 ]]; then
     warn "Nothing to uninstall."
   else
-    ok "fixit uninstalled"
+    ok "dum-tum uninstalled"
     echo ""
     echo "Restart your shell to drop the loaded hooks."
   fi
@@ -2285,7 +2285,7 @@ main() {
     return 0
   fi
 
-  info "Installing fixit for ${OS_NAME}…"
+  info "Installing dum-tum for ${OS_NAME}…"
   select_shells
   preflight_rc_updates
   validate_install_target
