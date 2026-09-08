@@ -299,7 +299,7 @@ _fx_ai_openrouter() {  # $* = intent
   local sys_p user_p body
   sys_p="$(_fx_ai_sys_prompt)"
   user_p="$(_fx_ai_user_payload "$@")"
-  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-openrouter)
   _fx_ai_http "$body" https://openrouter.ai/api/v1/chat/completions \
     "Authorization: Bearer $OPENROUTER_API_KEY" | _fx_ai_extract chat
 }
@@ -309,7 +309,7 @@ _fx_ai_openai() {  # $* = intent
   local sys_p user_p body
   sys_p="$(_fx_ai_sys_prompt)"
   user_p="$(_fx_ai_user_payload "$@")"
-  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-openai)
   _fx_ai_http "$body" https://api.openai.com/v1/chat/completions \
     "Authorization: Bearer $OPENAI_API_KEY" | _fx_ai_extract chat
 }
