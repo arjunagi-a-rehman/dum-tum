@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+url=""
+output=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      output="$2"
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      url="$1"
+      shift
+      ;;
+  esac
+done
+
+if [[ "$url" == */commits/main ]]; then
+  printf '{"sha":"%s"}\n' "${FIXIT_TEST_API_SHA:-1111111111111111111111111111111111111111}"
+  exit 0
+fi
+
+printf '%s\n' "$url" >> "$FIXIT_TEST_CURL_LOG"
+cp "$FIXIT_TEST_ROOT/src/${url##*/}" "$output"
