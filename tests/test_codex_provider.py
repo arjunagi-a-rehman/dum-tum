@@ -19,6 +19,7 @@ if [ "$1" = exec ] && [ "$2" = --help ]; then
 fi
 
 printf 'exec\\n' >>"$FX_TEST_CODEX_EXEC_COUNT"
+printf '%s\\n' "$PWD" >>"$FX_TEST_CODEX_PWD"
 output_file=
 output_option=
 while [ "$#" -gt 0 ]; do
@@ -69,6 +70,7 @@ class CodexProviderTests(unittest.TestCase):
         self.help_count = self.tmpdir / "help.count"
         self.exec_count = self.tmpdir / "exec.count"
         self.args = self.tmpdir / "args"
+        self.pwds = self.tmpdir / "pwds"
 
     def tearDown(self):
         self.tempdir.cleanup()
@@ -81,9 +83,13 @@ class CodexProviderTests(unittest.TestCase):
                 "FX_AI_TIMEOUT": "0.2" if mode == "timeout" else "5",
                 "FX_TEST_CODEX_ARGS": str(self.args),
                 "FX_TEST_CODEX_EXEC_COUNT": str(self.exec_count),
-                "FX_TEST_CODEX_HELP": help_text,
+                "FX_TEST_CODEX_HELP": (
+                    f"{help_text}\n--sandbox <MODE>  choices: read-only\n--ignore-user-config\n"
+                    "--ignore-rules\n--ephemeral"
+                ),
                 "FX_TEST_CODEX_HELP_COUNT": str(self.help_count),
                 "FX_TEST_CODEX_MODE": mode,
+                "FX_TEST_CODEX_PWD": str(self.pwds),
             }
         )
         invocation = "; ".join(
@@ -91,7 +97,8 @@ class CodexProviderTests(unittest.TestCase):
         )
         script = (
             f"source {shlex.quote(str(COMMON))}; "
-            "unset _FX_CODEX_OUTPUT_FILE_OPTION; "
+            "unset _FX_CODEX_CAPABILITIES_CHECKED "
+            "_FX_CODEX_CONFINEMENT_SUPPORTED _FX_CODEX_OUTPUT_FILE_OPTION; "
             f"{invocation}"
         )
         return subprocess.run(
@@ -121,6 +128,12 @@ class CodexProviderTests(unittest.TestCase):
                     self.assertEqual(result.stdout, "git status\ngit status\n")
                     self.assertEqual(self.count(self.help_count), 1)
                     self.assertEqual(self.count(self.exec_count), 2)
+                    self.assertTrue(
+                        all(
+                            Path(path).resolve() != self.tmpdir.resolve()
+                            for path in self.pwds.read_text().splitlines()
+                        )
+                    )
                     self.assertEqual(
                         self.args.read_text().splitlines(),
                         [expected_option, expected_option],
@@ -174,7 +187,7 @@ class CodexProviderTests(unittest.TestCase):
                 self.reset_logs()
 
     def reset_logs(self):
-        for path in (self.help_count, self.exec_count, self.args):
+        for path in (self.help_count, self.exec_count, self.args, self.pwds):
             if path.exists():
                 path.unlink()
 

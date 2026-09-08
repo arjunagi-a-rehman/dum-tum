@@ -344,8 +344,7 @@ provider_from_key_env() {
 
 read_rc_key() {
   local key_var="$1"
-  grep -E "^\s*export ${key_var}=" "$ZSHRC" 2>/dev/null | tail -1 | \
-    sed -E "s/.*${key_var}=//; s/^\"//; s/\"$//; s/^'//; s/'$//" || true
+  python3 "$INSTALL_DIR/fixit-ai.py" rc-value "$key_var" "$ZSHRC" 2>/dev/null || true
 }
 
 load_key_from_rc_for_provider() {
@@ -905,7 +904,7 @@ test_ai() {
     "$test_shell" -c '
       source "$1"
       _fx_ai "print only this exact shell command on one line: ls -la"
-    ' "$test_shell" "$test_file" 2>/dev/null
+    ' "$test_shell" "$test_file"
   ) >"$tmpout" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
@@ -920,12 +919,19 @@ test_ai() {
     sleep 1
     waited=$((waited+1))
   done
-  [[ "$rc" -eq 0 ]] && wait "$pid" 2>/dev/null
+  if [[ "$rc" -eq 0 ]]; then
+    wait "$pid" 2>/dev/null
+    rc=$?
+  fi
   sug="$(cat "$tmpout" 2>/dev/null)"
   rm -f "$tmpout"
   set -e
 
   sug="$(echo "$sug" | head -1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  if [[ "$rc" -eq 126 ]] && ! is_interactive; then
+    err "$PROVIDER cannot guarantee read-only/no-tools confinement; configuration was not written"
+    return 1
+  fi
   if [[ -n "$sug" ]]; then
     ok "AI test OK → $sug"
     return 0
@@ -971,23 +977,77 @@ test_ai() {
 }
 
 # write_rc_block <rc-file> <adapter-file>
+shell_quote() {
+  local value="${1-}"
+  value=${value//\'/\'\\\'\'}
+  printf "'%s'" "$value"
+}
+
+validate_rc_serialization_value() {
+  local label="$1" value="$2"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    err "Refusing to serialize $label containing a line break"
+    return 1
+  fi
+  if [[ "$value" == *"$MARKER_BEGIN"* || "$value" == *"$MARKER_END"* ]]; then
+    err "Refusing to serialize $label containing a managed-block marker"
+    return 1
+  fi
+}
+
+validate_rc_serialization() {
+  validate_rc_serialization_value FIXIT_HOME "$INSTALL_DIR" || return 1
+  validate_rc_serialization_value provider "${PROVIDER:-none}" || return 1
+  validate_rc_serialization_value model "$MODEL" || return 1
+  validate_rc_serialization_value variant "$VARIANT" || return 1
+  validate_rc_serialization_value key "$API_KEY" || return 1
+}
+
+managed_block_state() {
+  local rc_file="$1"
+  if [[ ! -f "$rc_file" ]]; then
+    printf 'none\n'
+    return 0
+  fi
+  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
+    $0 == begin {
+      begins++
+      if (inside) invalid=1
+      inside=1
+      next
+    }
+    $0 == end {
+      ends++
+      if (!inside) invalid=1
+      inside=0
+    }
+    END {
+      if (begins == 0 && ends == 0) print "none"
+      else if (begins == 1 && ends == 1 && !inside && !invalid) print "managed"
+      else print "invalid"
+    }
+  ' "$rc_file"
+}
+
 write_rc_block() {
   local rc_file="$1" adapter="$2"
-  local key_line model_line provider_line variant_line
-  provider_line="export FX_PROVIDER=\"${PROVIDER:-none}\""
+  local block_state key_line model_line provider_line source_line variant_line
+  block_state="$(managed_block_state "$rc_file")" || return 1
+  if [[ "$block_state" == invalid ]]; then
+    err "Refusing to update $rc_file: expected exactly one balanced dum-tum block"
+    return 1
+  fi
+  provider_line="export FX_PROVIDER=$(shell_quote "${PROVIDER:-none}")"
+  source_line="source $(shell_quote "$INSTALL_DIR/$adapter")"
 
   if [[ -n "$MODEL" ]]; then
-    local mesc="${MODEL//\\/\\\\}"
-    mesc="${mesc//\"/\\\"}"
-    model_line="export FX_MODEL=\"$mesc\""
+    model_line="export FX_MODEL=$(shell_quote "$MODEL")"
   else
     model_line='# export FX_MODEL="..."   # optional; omit to use provider default'
   fi
 
   if [[ -n "$VARIANT" ]]; then
-    local vesc="${VARIANT//\\/\\\\}"
-    vesc="${vesc//\"/\\\"}"
-    variant_line="export FX_VARIANT=\"$vesc\""
+    variant_line="export FX_VARIANT=$(shell_quote "$VARIANT")"
   else
     variant_line='# export FX_VARIANT="medium"   # reasoning effort (codex/opencode/claude/antigravity)'
   fi
@@ -1001,9 +1061,7 @@ write_rc_block() {
     gemini)     key_placeholder="AIza..." ;;
   esac
   if [[ -n "$key_var" && -n "$API_KEY" && "$API_KEY_PROVIDER" == "$PROVIDER" ]]; then
-    local esc="${API_KEY//\\/\\\\}"
-    esc="${esc//\"/\\\"}"
-    key_line="export ${key_var}=\"$esc\""
+    key_line="export ${key_var}=$(shell_quote "$API_KEY")"
   elif [[ -n "$key_var" ]]; then
     key_line="# export ${key_var}=\"${key_placeholder}\"   # uncomment and add your key"
   else
@@ -1014,7 +1072,7 @@ write_rc_block() {
   block=$(cat <<EOF
 $MARKER_BEGIN
 # https://github.com/arjunagi-a-rehman/dum-tum
-source "$INSTALL_DIR/$adapter"
+$source_line
 $provider_line
 $model_line
 $variant_line
@@ -1023,40 +1081,61 @@ $MARKER_END
 EOF
 )
 
-  touch "$rc_file"
-
-  if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
+  local tmp repl_file="" previous_mode=""
+  previous_mode="$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null || true)"
+  tmp="$(mktemp "${rc_file}.dum-tum.XXXXXX")" || return 1
+  if ! chmod 600 "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+  if [[ "$block_state" == managed ]]; then
     info "Updating existing fixit block in $rc_file"
-    local tmp repl_file
-    tmp="$(mktemp)"
-    repl_file="$(mktemp)"
-    printf '%s\n' "$block" > "$repl_file"
+    repl_file="$(mktemp "${rc_file}.dum-tum-block.XXXXXX")" || { rm -f "$tmp"; return 1; }
+    if ! chmod 600 "$repl_file" || ! printf '%s\n' "$block" > "$repl_file"; then
+      rm -f "$tmp" "$repl_file"
+      return 1
+    fi
     # Replace the marker block; insert replacement via file (no multiline -v)
-    awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
+    if ! awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
       $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
       $0 == end   { skip=0; next }
       !skip       { print }
-    ' "$rc_file" > "$tmp"
+    ' "$rc_file" > "$tmp"; then
+      rm -f "$tmp" "$repl_file"
+      return 1
+    fi
     rm -f "$repl_file"
     if ! grep -qF "$MARKER_BEGIN" "$tmp"; then
       printf '\n%s\n' "$block" >> "$tmp"
     fi
-    mv "$tmp" "$rc_file"
+    if ! mv "$tmp" "$rc_file"; then
+      rm -f "$tmp"
+      return 1
+    fi
   else
     info "Appending fixit block to $rc_file"
-    printf '\n%s\n' "$block" >> "$rc_file"
+    if [[ -f "$rc_file" ]] && ! cat "$rc_file" > "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+    if ! printf '\n%s\n' "$block" >> "$tmp"; then
+      rm -f "$tmp"
+      return 1
+    fi
+    if ! mv "$tmp" "$rc_file"; then
+      rm -f "$tmp"
+      return 1
+    fi
   fi
 
-  # The block can contain an API key — never leave the file
-  # group/world-readable (stock ~/.bashrc from /etc/skel is 0644).
-  if [[ "$(stat -f '%Lp' "$rc_file" 2>/dev/null || stat -c '%a' "$rc_file" 2>/dev/null)" != "600" ]]; then
+  if [[ -n "$previous_mode" && "$previous_mode" != "600" ]]; then
     warn "$rc_file was readable by other users — tightening to 600 (key inside)"
-    chmod 600 "$rc_file"
   fi
   ok "Configured $rc_file"
 }
 
 write_rc_blocks() {
+  validate_rc_serialization || return 1
   [[ "$DO_ZSH" -eq 1 ]]  && write_rc_block "$ZSHRC" "fixit.zsh"
   [[ "$DO_BASH" -eq 1 ]] && write_rc_block "$BASHRC" "fixit.bash"
   return 0
@@ -1145,12 +1224,17 @@ EOF
 # leave cleanup block in one rc file so sourcing clears leftover env
 uninstall_rc() {
   local rc_file="$1" cleanup="$2"
+  local block_state tmp repl_file
+  block_state="$(managed_block_state "$rc_file")" || return 1
+  if [[ "$block_state" == invalid ]]; then
+    err "Refusing to update $rc_file: expected exactly one balanced dum-tum block"
+    return 1
+  fi
   touch "$rc_file"
-  local tmp repl_file
   tmp="$(mktemp)"
   repl_file="$(mktemp)"
   printf '%s\n' "$cleanup" > "$repl_file"
-  if grep -qF "$MARKER_BEGIN" "$rc_file" 2>/dev/null; then
+  if [[ "$block_state" == managed ]]; then
     awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v rf="$repl_file" '
       $0 == begin { while ((getline line < rf) > 0) print line; skip=1; next }
       $0 == end   { skip=0; next }
