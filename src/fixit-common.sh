@@ -374,23 +374,42 @@ _fx_ai_claude() {  # $* = intent
     claude -p --output-format json --max-turns 1 "${margs[@]}" | _fx_ai_extract claude
 }
 
+_fx_codex_output_file_supported() {
+  if [[ -z "${_FX_CODEX_OUTPUT_FILE_OPTION+x}" ]]; then
+    local help
+    help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" codex exec --help 2>&1)" || help=""
+    if [[ "$help" == *"--output-last-message"* ]]; then
+      _FX_CODEX_OUTPUT_FILE_OPTION=--output-last-message
+    elif [[ "$help" == *"-o,"* || "$help" == *"-o "* ]]; then
+      _FX_CODEX_OUTPUT_FILE_OPTION=-o
+    else
+      _FX_CODEX_OUTPUT_FILE_OPTION=""
+    fi
+  fi
+  [[ -n "$_FX_CODEX_OUTPUT_FILE_OPTION" ]]
+}
+
 _fx_ai_codex() {  # $* = intent
-  local prompt out margs=()
+  local prompt out rc=0 margs=()
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(-c "model_reasoning_effort=\"$FX_VARIANT\"")
-  out="$(mktemp)"
+  out="$(mktemp)" || return 1
   # last message only; ephemeral; allow outside git repos
   # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
-  if _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      -o "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null 2>&1; then
-    _fx_ai_extract plain <"$out"
-  else
-    # fallback: capture stdout if -o failed / older CLI
+  if _fx_codex_output_file_supported; then
     _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" </dev/null | _fx_ai_extract plain
+      "$_FX_CODEX_OUTPUT_FILE_OPTION" "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null || rc=$?
+  else
+    _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
+      "${margs[@]}" -- "$prompt" </dev/null >"$out" || rc=$?
+  fi
+  if (( rc == 0 )); then
+    _fx_ai_extract plain <"$out"
+    rc=$?
   fi
   rm -f "$out"
+  return "$rc"
 }
 
 _fx_ai_antigravity() {  # $* = intent
