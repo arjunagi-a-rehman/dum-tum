@@ -7,7 +7,15 @@ dum-tum is published in two places from the same repo:
 
 ## Release checklist
 
-1. Make sure the working tree is clean and tests pass:
+1. Start from an up-to-date `main`, never from a feature branch:
+   ```bash
+   git switch main
+   test -z "$(git status --porcelain)"
+   git fetch origin
+   git pull --ff-only origin main
+   test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+   ```
+2. Make sure the audited `main` tree passes every release gate:
    ```bash
    bash tests/run-tests.sh
    ```
@@ -17,31 +25,49 @@ dum-tum is published in two places from the same repo:
      python -m unittest \
      tests.test_shell_interactive.InteractiveAdapterTest.test_bash_confirmation_flow -v
    ```
-2. Bump `version` in `package.json` (semver).
+3. Create a release branch with `git switch -c chore/release-X.Y.Z`, then bump `version` in `package.json` (semver).
    Review README and SECURITY disclosures if shell behavior, transmitted context, or provider handling changed.
-3. Commit the bump:
+4. Verify that the version has not already been published, then inspect the exact package contents from the clean audited tree:
+   ```bash
+   VERSION="$(node -p "require('./package.json').version")"
+   npm view "dum-tum@$VERSION" version
+   npm pack --dry-run
+   ```
+   The `npm view` command must report that the version does not exist. Any other error must be investigated rather than treated as an unpublished version. Review the complete `npm pack --dry-run` file list and confirm it comes from the intended `main` commit.
+5. Commit the bump and open a version-bump PR:
    ```bash
    git add package.json && git commit -m "chore: bump version to X.Y.Z"
-   git push origin main
+   git push -u origin chore/release-X.Y.Z
+   gh pr create --base main --title "chore: bump version to X.Y.Z" --body "Bump the audited release version; full suite and package contents verified."
    ```
-4. Tag and push:
+   Wait for review and required checks, then merge the PR through GitHub. Refresh and reverify the resulting `main` before tagging:
+   ```bash
+   git switch main
+   test -z "$(git status --porcelain)"
+   git fetch origin
+   git pull --ff-only origin main
+   test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+   ```
+   Run `bash tests/run-tests.sh` and `npm pack --dry-run` again on this merged tree, and verify `package.json` contains the intended version.
+6. Tag the verified `main` commit, check the tag target, and push it:
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z — <short title>"
+   test "$(git rev-list -n 1 vX.Y.Z)" = "$(git rev-parse main)"
    git push origin vX.Y.Z
    ```
-5. Publish to npm (requires `npm login`; account has 2FA — you'll be prompted to authenticate in the browser):
+7. Publish to npm (requires `npm login`; account has 2FA — you'll be prompted to authenticate in the browser):
    ```bash
-   npm pack --dry-run
    npm publish --access public
    ```
-6. Create the GitHub release with notes:
+8. Create the GitHub release with notes:
    ```bash
    gh release create vX.Y.Z --title "vX.Y.Z — <short title>" --notes "<release notes>"
    ```
-7. Verify both public release targets:
+9. Verify both public release targets and their commit:
    ```bash
    npm view dum-tum@X.Y.Z version dist-tags.latest gitHead dist.shasum --json
    gh release view vX.Y.Z
+   test "$(git rev-list -n 1 vX.Y.Z)" = "$(git rev-parse origin/main)"
    ```
 
 ## Notes
@@ -50,3 +76,4 @@ dum-tum is published in two places from the same repo:
 - `.npmignore` excludes `__pycache__/` and `*.pyc` from the tarball. Verify contents before publishing with `npm pack --dry-run`.
 - `npx github:arjunagi-a-rehman/dum-tum` runs **main branch HEAD**, not a release. Pin with `#vX.Y.Z` if you need a specific tag.
 - `npx dum-tum` (no `github:` prefix) runs the npm-published code, which is the release.
+- Merging functionality into `main` does not make it available through `npx dum-tum`; users receive it only after a new version is published to npm's `latest` dist-tag.
