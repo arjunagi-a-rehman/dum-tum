@@ -69,6 +69,32 @@ SHELL_CHOICE=""
 DO_ZSH=0
 DO_BASH=0
 
+TX_ACTIVE=0
+TX_STAGE=""
+TX_RUNTIME_BACKUP=""
+TX_RUNTIME_HAD_OLD=0
+TX_RUNTIME_STARTED=0
+TX_RUNTIME_ACTIVE=0
+TX_RC_COUNT=0
+TX_RC_TARGETS=()
+TX_RC_TEMPS=()
+TX_RC_BACKUPS=()
+TX_RC_EXISTED=()
+TX_RC_STARTED=()
+RENDERED_TARGET=""
+RENDERED_TEMP=""
+UTX_ACTIVE=0
+UTX_COUNT=0
+UTX_TARGETS=()
+UTX_TEMPS=()
+UTX_BACKUPS=()
+UTX_STARTED=()
+UTX_RUNTIME_TARGET=""
+UTX_RUNTIME_QUARANTINE=""
+UTX_RUNTIME_STARTED=0
+UTX_RUNTIME_DELETE_STARTED=0
+TX_PENDING_SIGNAL=0
+
 usage() {
   cat <<'EOF'
 fixit.zsh installer (macOS + Ubuntu/Linux)
@@ -181,6 +207,10 @@ require_single_line() {
 }
 
 validate_single_line_inputs() {
+  if [[ -z "$HOME" ]]; then
+    err "HOME must not be empty"
+    return 1
+  fi
   require_single_line HOME "$HOME" || return 1
   require_single_line FIXIT_HOME "$INSTALL_DIR" || return 1
   require_single_line ZSHRC "$ZSHRC" || return 1
@@ -191,6 +221,13 @@ validate_single_line_inputs() {
   require_single_line model "$MODEL" || return 1
   require_single_line variant "$VARIANT" || return 1
   require_single_line key "$API_KEY" || return 1
+  case "$INSTALL_DIR" in
+    /*) ;;
+    *)
+      err "FIXIT_HOME must be an absolute path: $INSTALL_DIR"
+      return 1
+      ;;
+  esac
 }
 
 shell_quote() {
@@ -437,6 +474,15 @@ install_identity_valid() {
   legacy_install_signature "$target"
 }
 
+install_directory_is_exclusive() {
+  local target="$1" unexpected
+  unexpected="$(find "$target" -mindepth 1 -maxdepth 1 \
+    ! \( -name fixit-common.sh -o -name fixit.zsh -o -name fixit.bash \
+         -o -name fixit-ai.py -o -name "$INSTALL_SENTINEL" \) \
+    -print -quit)" || return 1
+  [[ -z "$unexpected" ]]
+}
+
 target_contains_path() {
   local target="$1" protected="$2"
   [[ "$protected" == "$target" || "$protected" == "$target/"* ]]
@@ -449,9 +495,48 @@ normalize_install_path() {
   done
 }
 
+canonical_candidate_path() {
+  local candidate="$1" existing component suffix="" combined rest normalized="/"
+  while [[ "$candidate" != / && "$candidate" == */ ]]; do
+    candidate="${candidate%/}"
+  done
+  existing="$candidate"
+  while [[ ! -e "$existing" && ! -L "$existing" ]]; do
+    component="${existing##*/}"
+    suffix="/$component$suffix"
+    existing="${existing%/*}"
+    [[ -n "$existing" ]] || existing=/
+  done
+  [[ -d "$existing" ]] || return 1
+  existing="$(cd -P "$existing" 2>/dev/null && pwd)" || return 1
+  combined="$existing$suffix"
+  rest="${combined#/}"
+  while [[ -n "$rest" ]]; do
+    case "$rest" in
+      */*) component="${rest%%/*}"; rest="${rest#*/}" ;;
+      *) component="$rest"; rest="" ;;
+    esac
+    case "$component" in
+      ""|.) ;;
+      ..)
+        normalized="${normalized%/*}"
+        [[ -n "$normalized" ]] || normalized=/
+        ;;
+      *)
+        if [[ "$normalized" == / ]]; then
+          normalized="/$component"
+        else
+          normalized="$normalized/$component"
+        fi
+        ;;
+    esac
+  done
+  printf '%s\n' "$normalized"
+}
+
 validate_uninstall_target() {
   normalize_install_path
-  local target home_path pwd_path protected
+  local target home_path pwd_path self_path="" protected
   UNINSTALL_TARGET=""
   if [[ "$FIXIT_HOME_WAS_SET" == x && -z "${FIXIT_HOME:-}" ]]; then
     err "Refusing to uninstall with an empty FIXIT_HOME"
@@ -470,14 +555,15 @@ validate_uninstall_target() {
   fi
   target="$(cd -P "$INSTALL_DIR" 2>/dev/null && pwd)" || return 1
   case "$target" in
-    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/proc|/run|/sbin|/tmp|/usr|/var)
+    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/private/etc|/private/tmp|/private/var|/proc|/run|/sbin|/tmp|/usr|/usr/bin|/usr/lib|/usr/sbin|/var)
       err "Refusing to uninstall dangerous path: $target"
       return 1
       ;;
   esac
   home_path="$(cd -P "$HOME" 2>/dev/null && pwd)" || return 1
   pwd_path="$(pwd -P)"
-  for protected in "$home_path" "$pwd_path" ${SELF_DIR:+"$SELF_DIR"}; do
+  [[ -z "$SELF_DIR" ]] || self_path="$(canonical_candidate_path "$SELF_DIR")" || return 1
+  for protected in "$home_path" "$pwd_path" ${self_path:+"$self_path"}; do
     if target_contains_path "$target" "$protected"; then
       err "Refusing to uninstall protected path: $target"
       return 1
@@ -487,10 +573,15 @@ validate_uninstall_target() {
     err "Refusing to remove $target: no valid dum-tum installation identity"
     return 1
   fi
+  if ! install_directory_is_exclusive "$target"; then
+    err "Refusing to remove $target: installation directory contains unexpected entries"
+    return 1
+  fi
   UNINSTALL_TARGET="$target"
 }
 
 validate_install_target() {
+  local target home_path pwd_path self_path="" protected
   normalize_install_path
   [[ ! -L "$INSTALL_DIR" ]] || {
     err "Refusing to install into symlinked FIXIT_HOME: $INSTALL_DIR"
@@ -500,6 +591,25 @@ validate_install_target() {
     err "Refusing to install into non-directory FIXIT_HOME: $INSTALL_DIR"
     return 1
   }
+  target="$(canonical_candidate_path "$INSTALL_DIR")" || {
+    err "Could not resolve installation target: $INSTALL_DIR"
+    return 1
+  }
+  case "$target" in
+    /|/Applications|/Library|/System|/bin|/boot|/dev|/etc|/lib|/lib64|/opt|/private|/private/etc|/private/tmp|/private/var|/proc|/run|/sbin|/tmp|/usr|/usr/bin|/usr/lib|/usr/sbin|/var)
+      err "Refusing to install into dangerous path: $target"
+      return 1
+      ;;
+  esac
+  home_path="$(canonical_candidate_path "$HOME")" || return 1
+  pwd_path="$(pwd -P)"
+  [[ -z "$SELF_DIR" ]] || self_path="$(canonical_candidate_path "$SELF_DIR")" || return 1
+  for protected in "$home_path" "$pwd_path" ${self_path:+"$self_path"}; do
+    if target_contains_path "$target" "$protected"; then
+      err "Refusing to install into protected path: $target"
+      return 1
+    fi
+  done
   if [[ -d "$INSTALL_DIR" && -n "$(find "$INSTALL_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]]; then
     if ! install_identity_valid "$INSTALL_DIR"; then
       err "Refusing to install into non-empty directory without a valid dum-tum identity: $INSTALL_DIR"
@@ -669,6 +779,137 @@ install_deps() {
   ok "Dependencies installed"
 }
 
+runtime_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null
+}
+
+validate_staged_runtime() {
+  local stage="$1" f mode
+  runtime_files_present "$stage" || {
+    err "Staged runtime is incomplete"
+    return 1
+  }
+  for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
+    mode="$(runtime_mode "$stage/$f")" || return 1
+    if [[ "$mode" != 644 ]]; then
+      err "Invalid permissions on staged runtime file: $f"
+      return 1
+    fi
+  done
+  bash -n "$stage/fixit-common.sh" && bash -n "$stage/fixit.bash" || {
+    err "Invalid shell syntax in staged Bash runtime"
+    return 1
+  }
+  if have zsh; then
+    zsh -n "$stage/fixit.zsh" || {
+      err "Invalid shell syntax in staged zsh runtime"
+      return 1
+    }
+  fi
+  python3 -c '
+import ast
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+' "$stage/fixit-ai.py" || {
+    err "Invalid Python syntax in staged runtime"
+    return 1
+  }
+  install_identity_valid "$stage" || {
+    err "Staged runtime identity validation failed"
+    return 1
+  }
+}
+
+rollback_install_transaction() {
+  local i backup target rollback_failed=0
+  [[ "$TX_ACTIVE" -eq 1 ]] || return 0
+  set +e
+  for ((i=TX_RC_COUNT-1; i>=0; i--)); do
+    [[ "${TX_RC_STARTED[$i]}" -eq 1 ]] || continue
+    target="${TX_RC_TARGETS[$i]}"
+    backup="${TX_RC_BACKUPS[$i]}"
+    if [[ "${TX_RC_EXISTED[$i]}" -eq 1 ]]; then
+      if [[ -n "$backup" && -e "$backup" ]]; then
+        if rm -f "$target" && mv "$backup" "$target"; then
+          TX_RC_BACKUPS[$i]=""
+        else
+          rollback_failed=1
+          warn "Could not restore $target; recovery backup retained at $backup"
+        fi
+      else
+        rollback_failed=1
+        warn "Could not restore $target; its recovery backup is missing"
+      fi
+    else
+      if ! rm -f "$target"; then
+        rollback_failed=1
+        warn "Could not remove newly created shell configuration: $target"
+      fi
+    fi
+  done
+  if [[ "$TX_RUNTIME_STARTED" -eq 1 ]]; then
+    if [[ "$TX_RUNTIME_ACTIVE" -eq 1 ]]; then
+      if ! rm -rf "$INSTALL_DIR"; then
+        rollback_failed=1
+        warn "Could not remove the failed runtime at $INSTALL_DIR"
+      fi
+    fi
+    if [[ "$TX_RUNTIME_HAD_OLD" -eq 1 && -d "$TX_RUNTIME_BACKUP" ]]; then
+      if [[ -e "$INSTALL_DIR" ]] || ! mv "$TX_RUNTIME_BACKUP" "$INSTALL_DIR"; then
+        rollback_failed=1
+        warn "Could not restore the previous runtime; recovery backup retained at $TX_RUNTIME_BACKUP"
+      else
+        TX_RUNTIME_BACKUP=""
+      fi
+    elif [[ "$TX_RUNTIME_HAD_OLD" -eq 1 ]]; then
+      rollback_failed=1
+      warn "Could not restore the previous runtime; its recovery backup is missing"
+    fi
+  fi
+  for ((i=0; i<TX_RC_COUNT; i++)); do
+    target="${TX_RC_TEMPS[$i]}"
+    [[ -z "$target" ]] || rm -f "$target"
+  done
+  [[ -z "$TX_STAGE" ]] || rm -rf "$TX_STAGE"
+  TX_ACTIVE=0
+  if [[ "$rollback_failed" -eq 1 ]]; then
+    err "Installation failed and rollback is incomplete; retained recovery backups require manual restoration"
+    return 1
+  fi
+  warn "Installation failed; restored the previous runtime and shell configuration"
+}
+
+transaction_exit_trap() {
+  local status=$?
+  rollback_install_transaction || status=1
+  exit "$status"
+}
+
+defer_transaction_signals() {
+  TX_PENDING_SIGNAL=0
+  trap 'TX_PENDING_SIGNAL=130' INT
+  trap 'TX_PENDING_SIGNAL=143' TERM
+}
+
+resume_transaction_signals() {
+  local pending="$TX_PENDING_SIGNAL"
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  TX_PENDING_SIGNAL=0
+  [[ "$pending" -eq 0 ]] || return "$pending"
+}
+
+begin_install_transaction() {
+  TX_ACTIVE=1
+  TX_PENDING_SIGNAL=0
+  trap transaction_exit_trap EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
 resolve_runtime_raw() {
   RUNTIME_RAW="$REPO_RAW"
   [[ -z "${FIXIT_RAW+x}" ]] || return 0
@@ -685,11 +926,17 @@ resolve_runtime_raw() {
   ok "Pinned runtime source: $sha"
 }
 
-install_script() (
-  local f use_local=0 sentinel_tmp destination="$INSTALL_DIR"
-  INSTALL_DIR="$(mktemp -d)" || return 1
-  trap 'rm -rf "$INSTALL_DIR"' EXIT
-  set -e
+stage_runtime() {
+  local parent f use_local=0
+  parent="$(dirname "$INSTALL_DIR")"
+  mkdir -p "$parent"
+  TX_STAGE="$(mktemp -d "$parent/.dum-tum-install.XXXXXX")" || return 1
+  if [[ -d "$INSTALL_DIR" ]]; then
+    cp -pR "$INSTALL_DIR/." "$TX_STAGE/" || return 1
+    for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py "$INSTALL_SENTINEL"; do
+      rm -f "$TX_STAGE/$f" || return 1
+    done
+  fi
   if [[ -n "$SELF_DIR" ]]; then
     use_local=1
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
@@ -697,41 +944,27 @@ install_script() (
     done
   fi
   if [[ "$use_local" -eq 1 ]]; then
-    mkdir -p "$INSTALL_DIR"
     info "Using local scripts from $SELF_DIR/src"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      cp "$SELF_DIR/src/$f" "$INSTALL_DIR/$f"
+      cp "$SELF_DIR/src/$f" "$TX_STAGE/$f"
     done
   else
     resolve_runtime_raw
-    mkdir -p "$INSTALL_DIR"
     info "Downloading scripts from GitHub…"
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
-      curl -fsSL "$RUNTIME_RAW/src/$f" -o "$INSTALL_DIR/$f"
+      curl -fsSL "$RUNTIME_RAW/src/$f" -o "$TX_STAGE/$f"
     done
   fi
-  chmod 644 "$INSTALL_DIR"/fixit-common.sh "$INSTALL_DIR"/fixit.zsh "$INSTALL_DIR"/fixit.bash "$INSTALL_DIR"/fixit-ai.py
-  sentinel_tmp="$(mktemp "$INSTALL_DIR/.dum-tum-install.XXXXXX")" || return 1
-  printf '%s\n' "$INSTALL_SENTINEL_VALUE" > "$sentinel_tmp" || {
-    rm -f "$sentinel_tmp"
-    return 1
-  }
-  chmod 644 "$sentinel_tmp" || {
-    rm -f "$sentinel_tmp"
-    return 1
-  }
-  mv "$sentinel_tmp" "$INSTALL_DIR/$INSTALL_SENTINEL" || {
-    rm -f "$sentinel_tmp"
-    return 1
-  }
-  mkdir -p "$destination"
-  for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py "$INSTALL_SENTINEL"; do
-    cp "$INSTALL_DIR/$f" "$destination/$f"
-  done
-  ok "Installed → $destination"
-)
+  chmod 644 "$TX_STAGE"/fixit-common.sh "$TX_STAGE"/fixit.zsh \
+    "$TX_STAGE"/fixit.bash "$TX_STAGE"/fixit-ai.py
+  printf '%s\n' "$INSTALL_SENTINEL_VALUE" > "$TX_STAGE/$INSTALL_SENTINEL"
+  chmod 644 "$TX_STAGE/$INSTALL_SENTINEL"
+  validate_staged_runtime "$TX_STAGE"
+  ok "Staged and validated runtime"
+}
 
 detect_ai_clis() {
+  local runtime_dir="${1:-$INSTALL_DIR}"
   HAVE_OPENCODE=0
   HAVE_CLAUDE=0
   HAVE_CODEX=0
@@ -751,7 +984,7 @@ detect_ai_clis() {
   if have agy && FX_PROVIDER=antigravity FX_AI_READY_TIMEOUT=10 bash -c '
     source "$1"
     _fx_ai_ready
-  ' bash "$INSTALL_DIR/fixit-common.sh"; then
+  ' bash "$runtime_dir/fixit-common.sh"; then
     HAVE_ANTIGRAVITY=1
     ok "Detected Antigravity CLI ($(command -v agy))"
   elif have agy; then
@@ -1306,28 +1539,30 @@ test_ai() {
     return 0
   fi
   info "Testing AI backend ($PROVIDER)…"
-  local sug rc=0
-  local test_shell="zsh" test_file="$INSTALL_DIR/fixit.zsh"
+  local sug rc=0 runtime_dir="$INSTALL_DIR"
+  [[ "$TX_ACTIVE" -eq 1 && -n "$TX_STAGE" ]] && runtime_dir="$TX_STAGE"
+  local test_shell="zsh" test_file="$runtime_dir/fixit.zsh"
   if [[ "$DO_ZSH" -eq 0 ]]; then
     test_shell="bash"
-    test_file="$INSTALL_DIR/fixit.bash"
+    test_file="$runtime_dir/fixit.bash"
   fi
   set +e
   # background + watchdog: CLI backends can queue for a long time
   local tmpout pid waited=0 limit=120
   tmpout="$(mktemp)"
-  local -a envargs=()
+  local -a envargs=(
+    "FX_PROVIDER=$PROVIDER"
+    "FX_MODEL=$MODEL"
+    "FX_VARIANT=$VARIANT"
+    "FX_AI_TIMEOUT=100"
+  )
   [[ -n "$key_var" ]] && envargs+=("${key_var}=${API_KEY}")
   (
-    FX_PROVIDER="$PROVIDER" \
-    FX_MODEL="$MODEL" \
-    FX_VARIANT="$VARIANT" \
-    FX_AI_TIMEOUT=100 \
     env "${envargs[@]}" \
     "$test_shell" -c '
       source "$1"
       _fx_ai "print only this exact shell command on one line: ls -la"
-    ' "$test_shell" "$test_file" 2>/dev/null
+    ' "$test_shell" "$test_file"
   ) >"$tmpout" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
@@ -1342,8 +1577,15 @@ test_ai() {
     sleep 1
     waited=$((waited+1))
   done
-  [[ "$rc" -eq 0 ]] && wait "$pid" 2>/dev/null
-  sug="$(cat "$tmpout" 2>/dev/null)"
+  if [[ "$rc" -eq 0 ]]; then
+    wait "$pid" 2>/dev/null
+    rc=$?
+  fi
+  if [[ "$rc" -eq 0 ]]; then
+    sug="$(cat "$tmpout" 2>/dev/null)"
+  else
+    sug=""
+  fi
   rm -f "$tmpout"
   set -e
 
@@ -1392,9 +1634,43 @@ test_ai() {
   esac
 }
 
-write_plain_marked_block() {
+validate_provider_candidate() {
+  local normalized
+  normalized="$(normalize_provider "$PROVIDER")"
+  if [[ -z "$normalized" || "$normalized" != "$PROVIDER" ]]; then
+    err "Invalid provider configuration candidate: $PROVIDER"
+    return 1
+  fi
+  validate_single_line_inputs
+}
+
+queue_rendered_update() {
+  local i
+  for ((i=0; i<TX_RC_COUNT; i++)); do
+    if [[ "${TX_RC_TARGETS[$i]}" == "$RENDERED_TARGET" ]]; then
+      err "Selected shell files resolve to the same target: $RENDERED_TARGET"
+      rm -f "$RENDERED_TEMP"
+      return 1
+    fi
+  done
+  TX_RC_TARGETS[$TX_RC_COUNT]="$RENDERED_TARGET"
+  TX_RC_TEMPS[$TX_RC_COUNT]="$RENDERED_TEMP"
+  TX_RC_BACKUPS[$TX_RC_COUNT]=""
+  if [[ -f "$RENDERED_TARGET" ]]; then
+    TX_RC_EXISTED[$TX_RC_COUNT]=1
+  else
+    TX_RC_EXISTED[$TX_RC_COUNT]=0
+  fi
+  TX_RC_STARTED[$TX_RC_COUNT]=0
+  TX_RC_COUNT=$((TX_RC_COUNT+1))
+}
+
+render_marked_block() {
   local rc_file="$1" begin="$2" end="$3" label="$4" block="$5"
+  local stores_api_key="$6" syntax_shell="$7"
   local target dir tmp repl_file mode
+  RENDERED_TARGET=""
+  RENDERED_TEMP=""
   validate_marked_block "$rc_file" "$begin" "$end" "$label" || return 1
   target="$(resolve_rc_file "$rc_file")" || return 1
   dir="$(dirname "$target")"
@@ -1407,12 +1683,19 @@ write_plain_marked_block() {
     rm -f "$tmp" "$repl_file"
     return 1
   }
+  if ! "$syntax_shell" -n "$repl_file"; then
+    err "Invalid generated configuration for $rc_file"
+    rm -f "$tmp" "$repl_file"
+    return 1
+  fi
   if [[ -f "$target" ]] && grep -qxF "$begin" "$target" 2>/dev/null; then
+    info "Updating existing $label block in $rc_file"
     rewrite_managed_file "$target" "$tmp" "$repl_file" "$begin" "$end" || {
       rm -f "$tmp" "$repl_file"
       return 1
     }
   else
+    info "Appending $label block to $rc_file"
     if [[ -f "$target" ]]; then
       cat "$target" > "$tmp" || {
         rm -f "$tmp" "$repl_file"
@@ -1425,18 +1708,23 @@ write_plain_marked_block() {
     }
   fi
   rm -f "$repl_file"
-  mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
-  if [[ -n "$mode" ]]; then
+  mode="$(runtime_mode "$target" 2>/dev/null || true)"
+  if [[ "$stores_api_key" -eq 1 && "$mode" != 600 ]]; then
+    warn "$rc_file was readable by other users — tightening to 600 (key inside)"
+  fi
+  if [[ "$stores_api_key" -eq 1 ]]; then
+    chmod 600 "$tmp" || {
+      rm -f "$tmp"
+      return 1
+    }
+  elif [[ -n "$mode" ]]; then
     chmod "$mode" "$tmp" || {
       rm -f "$tmp"
       return 1
     }
   fi
-  mv "$tmp" "$target" || {
-    rm -f "$tmp"
-    return 1
-  }
-  ok "Configured $rc_file"
+  RENDERED_TARGET="$target"
+  RENDERED_TEMP="$tmp"
 }
 
 bash_profile_sources_bashrc() {
@@ -1506,7 +1794,7 @@ raise SystemExit(1)
 ' "$target" "$bashrc_target" "$HOME"
 }
 
-ensure_bash_profile_loader() {
+prepare_bash_profile_loader() {
   [[ "$OS" == Darwin && "$DO_BASH" -eq 1 ]] || return 0
   local target bashrc_target block
   target="$(resolve_rc_file "$BASH_PROFILE")" || return 1
@@ -1528,13 +1816,15 @@ fi
 $BASH_PROFILE_MARKER_END
 EOF
 )
-  write_plain_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
-    "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' "$block"
+  render_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
+    "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' "$block" 0 bash || return 1
+  queue_rendered_update
 }
 
-# write_rc_block <rc-file> <adapter-file>
-write_rc_block() {
+# prepare_rc_block <rc-file> <adapter-file> <syntax-shell>
+prepare_rc_block() {
   local rc_file="$1" adapter="$2"
+  local syntax_shell="$3"
   local key_line model_line provider_line variant_line stores_api_key=0
   provider_line="export FX_PROVIDER=$(shell_quote "${PROVIDER:-none}")"
 
@@ -1579,72 +1869,91 @@ $key_line
 $MARKER_END
 EOF
 )
-
-  validate_managed_block "$rc_file" || return 1
-  local target dir tmp repl_file mode
-  target="$(resolve_rc_file "$rc_file")" || return 1
-  dir="$(dirname "$target")"
-  tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 1
-  repl_file="$(mktemp "$dir/.dum-tum-block.XXXXXX")" || {
-    rm -f "$tmp"
-    return 1
-  }
-  printf '%s\n' "$block" > "$repl_file" || {
-    rm -f "$tmp" "$repl_file"
-    return 1
-  }
-
-  if [[ -f "$target" ]] && grep -qxF "$MARKER_BEGIN" "$target" 2>/dev/null; then
-    info "Updating existing fixit block in $rc_file"
-    rewrite_managed_file "$target" "$tmp" "$repl_file" || {
-      rm -f "$tmp" "$repl_file"
-      return 1
-    }
-  else
-    info "Appending fixit block to $rc_file"
-    if [[ -f "$target" ]]; then
-      cat "$target" > "$tmp" || {
-        rm -f "$tmp" "$repl_file"
-        return 1
-      }
-    fi
-    printf '\n%s\n' "$block" >> "$tmp" || {
-      rm -f "$tmp" "$repl_file"
-      return 1
-    }
-  fi
-  rm -f "$repl_file"
-
-  mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
-  if [[ "$stores_api_key" -eq 1 && "$mode" != "600" ]]; then
-    warn "$rc_file was readable by other users — tightening to 600 (key inside)"
-  fi
-  if [[ "$stores_api_key" -eq 1 ]]; then
-    chmod 600 "$tmp" || {
-      rm -f "$tmp"
-      return 1
-    }
-  elif [[ -n "$mode" ]]; then
-    chmod "$mode" "$tmp" || {
-      rm -f "$tmp"
-      return 1
-    }
-  fi
-  mv "$tmp" "$target" || {
-    rm -f "$tmp"
-    return 1
-  }
-  ok "Configured $rc_file"
+  render_marked_block "$rc_file" "$MARKER_BEGIN" "$MARKER_END" dum-tum \
+    "$block" "$stores_api_key" "$syntax_shell" || return 1
+  queue_rendered_update
 }
 
-write_rc_blocks() {
+prepare_rc_updates() {
   if [[ "$DO_ZSH" -eq 1 ]]; then
-    write_rc_block "$ZSHRC" "fixit.zsh" || return 1
+    prepare_rc_block "$ZSHRC" "fixit.zsh" zsh || return 1
   fi
   if [[ "$DO_BASH" -eq 1 ]]; then
-    write_rc_block "$BASHRC" "fixit.bash" || return 1
+    prepare_rc_block "$BASHRC" "fixit.bash" bash || return 1
   fi
-  ensure_bash_profile_loader
+  prepare_bash_profile_loader
+}
+
+activate_install_transaction() {
+  local parent placeholder i target temp backup move_rc
+  validate_install_target || return 1
+  parent="$(dirname "$INSTALL_DIR")"
+  if [[ -e "$INSTALL_DIR" ]]; then
+    TX_RUNTIME_HAD_OLD=1
+    placeholder="$(mktemp -d "$parent/.dum-tum-backup.XXXXXX")" || return 1
+    rmdir "$placeholder" || return 1
+    TX_RUNTIME_BACKUP="$placeholder"
+    defer_transaction_signals
+    move_rc=0
+    mv "$INSTALL_DIR" "$TX_RUNTIME_BACKUP" || move_rc=$?
+    [[ "$move_rc" -ne 0 ]] || TX_RUNTIME_STARTED=1
+    resume_transaction_signals || return $?
+    [[ "$move_rc" -eq 0 ]] || return "$move_rc"
+  fi
+  defer_transaction_signals
+  move_rc=0
+  mv "$TX_STAGE" "$INSTALL_DIR" || move_rc=$?
+  if [[ "$move_rc" -eq 0 ]]; then
+    TX_RUNTIME_STARTED=1
+    TX_RUNTIME_ACTIVE=1
+    TX_STAGE=""
+  fi
+  resume_transaction_signals || return $?
+  [[ "$move_rc" -eq 0 ]] || return "$move_rc"
+
+  for ((i=0; i<TX_RC_COUNT; i++)); do
+    target="${TX_RC_TARGETS[$i]}"
+    temp="${TX_RC_TEMPS[$i]}"
+    if [[ "${TX_RC_EXISTED[$i]}" -eq 1 ]]; then
+      placeholder="$(mktemp "$(dirname "$target")/.dum-tum-backup.XXXXXX")" || return 1
+      rm -f "$placeholder" || return 1
+      backup="$placeholder"
+      TX_RC_BACKUPS[$i]="$backup"
+      defer_transaction_signals
+      move_rc=0
+      mv "$target" "$backup" || move_rc=$?
+      [[ "$move_rc" -ne 0 ]] || TX_RC_STARTED[$i]=1
+      resume_transaction_signals || return $?
+      [[ "$move_rc" -eq 0 ]] || return "$move_rc"
+    fi
+    defer_transaction_signals
+    move_rc=0
+    mv "$temp" "$target" || move_rc=$?
+    if [[ "$move_rc" -eq 0 ]]; then
+      TX_RC_STARTED[$i]=1
+      TX_RC_TEMPS[$i]=""
+    fi
+    resume_transaction_signals || return $?
+    [[ "$move_rc" -eq 0 ]] || return "$move_rc"
+    ok "Configured $target"
+  done
+
+  ok "Installed → $INSTALL_DIR"
+}
+
+complete_install_transaction() {
+  local i backup cleanup_ok=1
+  trap '' INT TERM
+  [[ -z "$TX_RUNTIME_BACKUP" ]] || rm -rf "$TX_RUNTIME_BACKUP" || cleanup_ok=0
+  for ((i=0; i<TX_RC_COUNT; i++)); do
+    backup="${TX_RC_BACKUPS[$i]}"
+    [[ -z "$backup" ]] || rm -f "$backup" || cleanup_ok=0
+  done
+  TX_ACTIVE=0
+  trap - EXIT INT TERM
+  if [[ "$cleanup_ok" -eq 0 ]]; then
+    warn "Installation completed, but a transaction backup could not be removed"
+  fi
 }
 
 ensure_shell_default() {
@@ -1727,8 +2036,8 @@ Docs: https://github.com/arjunagi-a-rehman/dum-tum
 EOF
 }
 
-remove_marked_block() {
-  local rc_file="$1" begin="$2" end="$3" label="$4" target dir tmp mode
+prepare_uninstall_removal() {
+  local rc_file="$1" begin="$2" end="$3" label="$4" target dir tmp mode source i
   [[ -e "$rc_file" || -L "$rc_file" ]] || return 1
   validate_marked_block "$rc_file" "$begin" "$end" "$label" || return 2
   target="$(resolve_rc_file "$rc_file")" || return 2
@@ -1736,8 +2045,15 @@ remove_marked_block() {
   grep -qxF "$begin" "$target" 2>/dev/null || return 1
   dir="$(dirname "$target")"
   mode="$(stat -c '%a' "$target" 2>/dev/null || stat -f '%Lp' "$target" 2>/dev/null || true)"
+  source="$target"
+  for ((i=0; i<UTX_COUNT; i++)); do
+    if [[ "${UTX_TARGETS[$i]}" == "$target" ]]; then
+      source="${UTX_TEMPS[$i]}"
+      break
+    fi
+  done
   tmp="$(mktemp "$dir/.dum-tum-rc.XXXXXX")" || return 2
-  rewrite_managed_file "$target" "$tmp" "" "$begin" "$end" || {
+  rewrite_managed_file "$source" "$tmp" "" "$begin" "$end" || {
     rm -f "$tmp"
     return 2
   }
@@ -1745,15 +2061,169 @@ remove_marked_block() {
     rm -f "$tmp"
     return 2
   }
-  mv "$tmp" "$target" || {
-    rm -f "$tmp"
-    return 2
-  }
-  ok "Updated $rc_file (removed dum-tum config)"
+  if (( i < UTX_COUNT )); then
+    rm -f "${UTX_TEMPS[$i]}"
+    UTX_TEMPS[$i]="$tmp"
+  else
+    UTX_TARGETS[$UTX_COUNT]="$target"
+    UTX_TEMPS[$UTX_COUNT]="$tmp"
+    UTX_BACKUPS[$UTX_COUNT]=""
+    UTX_STARTED[$UTX_COUNT]=0
+    UTX_COUNT=$((UTX_COUNT+1))
+  fi
 }
 
-uninstall_rc() {
-  remove_marked_block "$1" "$MARKER_BEGIN" "$MARKER_END" dum-tum
+prepare_uninstall_backups() {
+  local i target backup
+  for ((i=0; i<UTX_COUNT; i++)); do
+    target="${UTX_TARGETS[$i]}"
+    backup="$(mktemp "$(dirname "$target")/.dum-tum-backup.XXXXXX")" || return 1
+    if ! cp -p "$target" "$backup"; then
+      rm -f "$backup"
+      return 1
+    fi
+    UTX_BACKUPS[$i]="$backup"
+  done
+}
+
+rollback_uninstall_transaction() {
+  local i target backup rollback_failed=0
+  [[ "$UTX_ACTIVE" -eq 1 ]] || return 0
+  set +e
+  for ((i=UTX_COUNT-1; i>=0; i--)); do
+    target="${UTX_TARGETS[$i]}"
+    backup="${UTX_BACKUPS[$i]}"
+    if [[ "${UTX_STARTED[$i]}" -eq 1 ]]; then
+      if [[ -n "$backup" && -f "$backup" ]] && mv "$backup" "$target"; then
+        UTX_BACKUPS[$i]=""
+      else
+        rollback_failed=1
+        warn "Could not restore $target; recovery backup retained at $backup"
+      fi
+    elif [[ -n "$backup" ]]; then
+      rm -f "$backup"
+      UTX_BACKUPS[$i]=""
+    fi
+  done
+  if [[ "$UTX_RUNTIME_DELETE_STARTED" -eq 1 ]]; then
+    rollback_failed=1
+    if [[ -d "$UTX_RUNTIME_QUARANTINE/install" ]] && \
+       install_identity_valid "$UTX_RUNTIME_QUARANTINE/install" && \
+       install_directory_is_exclusive "$UTX_RUNTIME_QUARANTINE/install"; then
+      warn "Runtime deletion started and cannot be rolled back safely; recovery copy retained at $UTX_RUNTIME_QUARANTINE/install"
+    else
+      warn "Runtime deletion was incomplete; any remaining recovery data is retained at $UTX_RUNTIME_QUARANTINE/install"
+    fi
+  elif [[ "$UTX_RUNTIME_STARTED" -eq 1 ]]; then
+    if [[ -d "$UTX_RUNTIME_QUARANTINE/install" && ! -e "$UTX_RUNTIME_TARGET" ]] && \
+       mv "$UTX_RUNTIME_QUARANTINE/install" "$UTX_RUNTIME_TARGET"; then
+      rmdir "$UTX_RUNTIME_QUARANTINE" 2>/dev/null
+      UTX_RUNTIME_QUARANTINE=""
+    else
+      rollback_failed=1
+      warn "Could not restore the installation; recovery copy retained at $UTX_RUNTIME_QUARANTINE/install"
+    fi
+  elif [[ -n "$UTX_RUNTIME_QUARANTINE" ]]; then
+    rmdir "$UTX_RUNTIME_QUARANTINE" 2>/dev/null
+    UTX_RUNTIME_QUARANTINE=""
+  fi
+  for ((i=0; i<UTX_COUNT; i++)); do
+    [[ -z "${UTX_TEMPS[$i]}" ]] || rm -f "${UTX_TEMPS[$i]}"
+  done
+  UTX_ACTIVE=0
+  if [[ "$rollback_failed" -eq 1 ]]; then
+    err "Uninstall failed and rollback is incomplete; retained recovery backups require manual restoration"
+    return 1
+  fi
+  warn "Uninstall failed; restored the installation and shell configuration"
+}
+
+uninstall_exit_trap() {
+  local status=$?
+  rollback_uninstall_transaction || status=1
+  exit "$status"
+}
+
+begin_uninstall_transaction() {
+  UTX_ACTIVE=1
+  UTX_COUNT=0
+  UTX_TARGETS=()
+  UTX_TEMPS=()
+  UTX_BACKUPS=()
+  UTX_STARTED=()
+  UTX_RUNTIME_TARGET=""
+  UTX_RUNTIME_QUARANTINE=""
+  UTX_RUNTIME_STARTED=0
+  UTX_RUNTIME_DELETE_STARTED=0
+  TX_PENDING_SIGNAL=0
+  trap uninstall_exit_trap EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+quarantine_uninstall_runtime() {
+  local parent move_rc
+  [[ -n "$UNINSTALL_TARGET" ]] || return 0
+  if [[ -L "$UNINSTALL_TARGET" || ! -d "$UNINSTALL_TARGET" ]] || \
+     ! install_identity_valid "$UNINSTALL_TARGET" || \
+     ! install_directory_is_exclusive "$UNINSTALL_TARGET"; then
+    err "Installation target changed after validation; refusing to remove it: $UNINSTALL_TARGET"
+    return 1
+  fi
+  parent="$(dirname "$UNINSTALL_TARGET")"
+  UTX_RUNTIME_QUARANTINE="$(mktemp -d "$parent/.dum-tum-uninstall.XXXXXX")" || return 1
+  defer_transaction_signals
+  move_rc=0
+  mv "$UNINSTALL_TARGET" "$UTX_RUNTIME_QUARANTINE/install" || move_rc=$?
+  if [[ "$move_rc" -eq 0 ]]; then
+    UTX_RUNTIME_TARGET="$UNINSTALL_TARGET"
+    UTX_RUNTIME_STARTED=1
+  fi
+  resume_transaction_signals || return $?
+  [[ "$move_rc" -eq 0 ]] || return "$move_rc"
+}
+
+commit_uninstall_transaction() {
+  local i target temp move_rc
+  for ((i=0; i<UTX_COUNT; i++)); do
+    target="${UTX_TARGETS[$i]}"
+    temp="${UTX_TEMPS[$i]}"
+    defer_transaction_signals
+    move_rc=0
+    mv "$temp" "$target" || move_rc=$?
+    if [[ "$move_rc" -eq 0 ]]; then
+      UTX_TEMPS[$i]=""
+      UTX_STARTED[$i]=1
+    fi
+    resume_transaction_signals || return $?
+    [[ "$move_rc" -eq 0 ]] || return "$move_rc"
+    ok "Updated $target (removed dum-tum config)"
+  done
+}
+
+complete_uninstall_transaction() {
+  local i cleanup_ok=1
+  trap '' INT TERM
+  if [[ "$UTX_RUNTIME_STARTED" -eq 1 ]]; then
+    UTX_RUNTIME_DELETE_STARTED=1
+    if ! rm -rf "$UTX_RUNTIME_QUARANTINE"; then
+      err "Could not remove quarantined installation: $UTX_RUNTIME_QUARANTINE"
+      return 1
+    fi
+    ok "Removed $UTX_RUNTIME_TARGET"
+    UTX_RUNTIME_QUARANTINE=""
+    UTX_RUNTIME_STARTED=0
+    UTX_RUNTIME_DELETE_STARTED=0
+  fi
+  for ((i=0; i<UTX_COUNT; i++)); do
+    [[ -z "${UTX_BACKUPS[$i]}" ]] || rm -f "${UTX_BACKUPS[$i]}" || cleanup_ok=0
+    UTX_BACKUPS[$i]=""
+  done
+  UTX_ACTIVE=0
+  trap - EXIT INT TERM
+  if [[ "$cleanup_ok" -eq 0 ]]; then
+    warn "Uninstall completed, but a transaction backup could not be removed"
+  fi
 }
 
 uninstall_fixit() {
@@ -1762,32 +2232,23 @@ uninstall_fixit() {
 
   validate_uninstall_target || return 1
   preflight_rc_uninstall || return 1
-  uninstall_rc "$ZSHRC" || rc=$?
-  case "$rc" in
-    0) removed=1 ;;
-    1) ;;
-    *) return "$rc" ;;
-  esac
+  begin_uninstall_transaction
+  prepare_uninstall_removal "$ZSHRC" "$MARKER_BEGIN" "$MARKER_END" dum-tum || rc=$?
+  case "$rc" in 0) removed=1 ;; 1) ;; *) return "$rc" ;; esac
   rc=0
-  remove_marked_block "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
+  prepare_uninstall_removal "$BASH_PROFILE" "$BASH_PROFILE_MARKER_BEGIN" \
     "$BASH_PROFILE_MARKER_END" 'dum-tum bashrc loader' || rc=$?
-  case "$rc" in
-    0) removed=1 ;;
-    1) ;;
-    *) return "$rc" ;;
-  esac
+  case "$rc" in 0) removed=1 ;; 1) ;; *) return "$rc" ;; esac
   rc=0
-  uninstall_rc "$BASHRC" || rc=$?
-  case "$rc" in
-    0) removed=1 ;;
-    1) ;;
-    *) return "$rc" ;;
-  esac
+  prepare_uninstall_removal "$BASHRC" "$MARKER_BEGIN" "$MARKER_END" dum-tum || rc=$?
+  case "$rc" in 0) removed=1 ;; 1) ;; *) return "$rc" ;; esac
+  prepare_uninstall_backups
+  quarantine_uninstall_runtime
+  [[ -z "$UNINSTALL_TARGET" ]] || removed=1
+  commit_uninstall_transaction
+  complete_uninstall_transaction
 
-  if [[ -n "$UNINSTALL_TARGET" ]]; then
-    remove_install_dir "$UNINSTALL_TARGET" || return 1
-    removed=1
-  else
+  if [[ -z "$UNINSTALL_TARGET" ]]; then
     warn "Install dir not found: $INSTALL_DIR"
   fi
 
@@ -1813,17 +2274,20 @@ main() {
   validate_install_target
   install_deps
   load_existing_config
-  install_script
-  detect_ai_clis
+  begin_install_transaction
+  stage_runtime
+  detect_ai_clis "$TX_STAGE"
   select_provider
   maybe_ask_key
   select_model
   select_variant
-  validate_single_line_inputs
+  validate_provider_candidate
   test_ai
-  write_rc_blocks
+  prepare_rc_updates
+  activate_install_transaction
   ensure_shell_default
   print_next_steps
+  complete_install_transaction
 }
 
 main
