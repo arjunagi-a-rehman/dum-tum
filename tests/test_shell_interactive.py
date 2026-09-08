@@ -218,6 +218,44 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertFalse(semicolon_marker.exists(), output)
         self.assertFalse(substitution_marker.exists(), output)
 
+    def exercise_autorun_safety(self):
+        date_executable = Path(self.tempdir.name) / "date"
+        date_marker = Path(self.tempdir.name) / "date-ran"
+        redirected = Path(self.tempdir.name) / "redirected"
+        visible_file = Path(self.tempdir.name) / "plain-safe-visible"
+        date_executable.write_text(
+            "#!/bin/sh\n"
+            ": > \"$FX_DATE_MARKER\"\n",
+            encoding="utf-8",
+        )
+        date_executable.chmod(0o755)
+        visible_file.touch()
+        self.shell.command(
+            f"PATH='{self.tempdir.name}':$PATH; export PATH; "
+            f"FX_DATE_MARKER='{date_marker}'; export FX_DATE_MARKER"
+        )
+
+        self.shell.command("_fx_all_commands() { printf '%s\\n' date; }")
+        self.shell.send("_fx_handle_not_found dtae --set=2026-01-01\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.assertIn("date", output)
+        self.assertFalse(date_marker.exists(), output)
+        self.shell.send("n\r")
+        self.shell.read_until_idle(PROMPT)
+        self.assertFalse(date_marker.exists(), output)
+
+        self.shell.command("_fx_all_commands() { printf '%s\\n' ls; }")
+        output = self.shell.command("_fx_handle_not_found sl")
+        self.assertIn(visible_file.name, output)
+        self.assertNotIn("[Enter] run", output)
+
+        self.shell.send(f"_fx_handle_not_found sl > '{redirected}'\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.shell.send("n\r")
+        output += self.shell.read_until_idle(PROMPT)
+        self.assertTrue(redirected.exists(), output)
+        self.assertEqual("", redirected.read_text(encoding="utf-8"), output)
+
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_confirmation_flow(self):
         self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
@@ -239,6 +277,11 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
         self.exercise_argv_confirmation()
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_autorun_checks_arguments_and_streams(self):
+        self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
+        self.exercise_autorun_safety()
+
     @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
     def test_bash_confirmation_flow(self):
         bash = shutil.which("bash")
@@ -253,6 +296,12 @@ class InteractiveAdapterTest(unittest.TestCase):
         bash = shutil.which("bash")
         self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
         self.exercise_argv_confirmation()
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_autorun_checks_arguments_and_streams(self):
+        bash = shutil.which("bash")
+        self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
+        self.exercise_autorun_safety()
 
 
 if __name__ == "__main__":
