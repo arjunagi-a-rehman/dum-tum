@@ -18,10 +18,9 @@ _fx_precmd() {
   { (( rc == 0 )) || (( _FX_FIXED )); } && return
   [[ -z "$_FX_LAST" ]] && return
   _FX_LASTFAIL="$_FX_LAST (exit $rc)"          # remember for the `fix` command
-  local -a w
-  read -ra w <<< "$_FX_LAST"
+  local line="$_FX_LAST"
   _FX_LAST=""
-  (( ${#w[@]} )) && _fx_fix_failed_line "$rc" "${w[@]}"
+  _fx_fix_failed_line "$rc" "$line"
 }
 
 # Only hook interactive shells
@@ -34,7 +33,8 @@ if [[ $- == *i* ]]; then
     esac
     [[ "$_FX_AT_PROMPT" == "1" ]] || return    # only first command after a prompt
     _FX_AT_PROMPT=0
-    _fx_preexec "$BASH_COMMAND"
+    _fx_preexec "${_FX_SUBMITTED_LINE:-$BASH_COMMAND}"
+    _FX_SUBMITTED_LINE=""
   }
   _FX_AT_PROMPT=1
   _fx_prompt_hook() { _fx_precmd; _FX_AT_PROMPT=1; }
@@ -45,6 +45,7 @@ if [[ $- == *i* ]]; then
   # Ctrl-M first runs our function, then accept-line (\C-j) submits what's left.
   if (( ${BASH_VERSINFO[0]} >= 4 )); then
     _fx_accept_line() {
+      _FX_SUBMITTED_LINE="$READLINE_LINE"
       if _fx_is_english_line "$READLINE_LINE"; then
         local full="$READLINE_LINE"
         local _FX_READLINE_CONFIRM=1 _FX_READLINE_ACCEPT=0 _FX_READLINE_EDIT=0 _FX_READLINE_CMD=""
@@ -54,10 +55,14 @@ if [[ $- == *i* ]]; then
         if (( _FX_READLINE_ACCEPT )); then
           READLINE_LINE="$_FX_READLINE_CMD"
           READLINE_POINT=${#READLINE_LINE}
+          _FX_SUBMITTED_LINE="$READLINE_LINE"
         elif (( _FX_READLINE_EDIT )); then
           READLINE_LINE="$_FX_READLINE_CMD"
           READLINE_POINT=${#READLINE_LINE}
+          _FX_SUBMITTED_LINE=""
           bind '"\C-xfa": "\C-xfr"' 2>/dev/null
+        else
+          _FX_SUBMITTED_LINE=""
         fi
       fi
     }

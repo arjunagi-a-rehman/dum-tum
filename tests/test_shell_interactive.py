@@ -256,6 +256,53 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertTrue(redirected.exists(), output)
         self.assertEqual("", redirected.read_text(encoding="utf-8"), output)
 
+    def exercise_typo_routing(self):
+        ai_marker = Path(self.tempdir.name) / "ai-ran"
+        self.shell.command(
+            f"FX_ROUTING_AI_MARKER='{ai_marker}'; "
+            "_fx_ai_resolve() { : > \"$FX_ROUTING_AI_MARKER\"; }; "
+            "_fx_all_commands() { printf '%s\\n' git; }"
+        )
+        self.shell.send("_fx_handle_not_found gti status\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.assertIn("closest: git", output)
+        self.assertIn("git status", output)
+        self.assertFalse(ai_marker.exists(), output)
+        self.shell.send("n\r")
+        self.shell.read_until_idle(PROMPT)
+        self.assertFalse(ai_marker.exists(), output)
+
+    def exercise_failed_line_repair(self):
+        document = Path(self.tempdir.name) / "document.txt"
+        output_path = Path(self.tempdir.name) / "count.txt"
+        spaced_document = Path(self.tempdir.name) / "document file.txt"
+        document.write_text("payload\n", encoding="utf-8")
+        spaced_document.write_text("must-not-run\n", encoding="utf-8")
+        self.shell.command(
+            f"FX_REPAIR_OUT='{output_path}'; FX_REPAIR_KEEP=kept; "
+            "export FX_REPAIR_OUT FX_REPAIR_KEEP; set -o pipefail"
+        )
+
+        raw = 'cat "dcoument.txt" | wc -c > "$FX_REPAIR_OUT" && printf EXPANSION:$FX_REPAIR_KEEP'
+        self.shell.send(raw + "\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        expected = 'cat "document.txt" | wc -c > "$FX_REPAIR_OUT" && printf EXPANSION:$FX_REPAIR_KEEP'
+        self.assertIn(expected, output)
+        self.shell.send("\n")
+        output += self.shell.read_until_idle(PROMPT)
+        self.assertEqual(8, int(output_path.read_text(encoding="utf-8")), output)
+        self.assertIn("EXPANSION:kept", output)
+
+        ambiguous = r"cat dcoument\ file.txt"
+        self.shell.send(ambiguous + "\r")
+        output = self.shell.read_until("[e] edit  [n] cancel")
+        self.assertIn("dcoument file.txt", output)
+        self.assertIn("document file.txt", output)
+        self.assertIn(ambiguous, output)
+        self.shell.send("n\r")
+        output += self.shell.read_until_idle(PROMPT)
+        self.assertNotIn("must-not-run", output)
+
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_confirmation_flow(self):
         self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
@@ -282,6 +329,16 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
         self.exercise_autorun_safety()
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_routes_typos_before_natural_language(self):
+        self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
+        self.exercise_typo_routing()
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_failed_line_repair_preserves_syntax(self):
+        self.start([shutil.which("zsh"), "-f"], "fixit.zsh")
+        self.exercise_failed_line_repair()
+
     @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
     def test_bash_confirmation_flow(self):
         bash = shutil.which("bash")
@@ -302,6 +359,21 @@ class InteractiveAdapterTest(unittest.TestCase):
         bash = shutil.which("bash")
         self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
         self.exercise_autorun_safety()
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_routes_typos_before_natural_language(self):
+        bash = shutil.which("bash")
+        self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
+        self.exercise_typo_routing()
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_failed_line_repair_preserves_syntax(self):
+        bash = shutil.which("bash")
+        version = subprocess.check_output([bash, "-c", "printf %s \"${BASH_VERSINFO[0]}\""]).decode()
+        if int(version) < 4:
+            self.skipTest("Bash 4+ is required for full submitted-line capture")
+        self.start([bash, "--noprofile", "--norc", "-i"], "fixit.bash")
+        self.exercise_failed_line_repair()
 
 
 if __name__ == "__main__":

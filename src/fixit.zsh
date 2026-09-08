@@ -61,8 +61,8 @@ _fx_precmd() {
   { (( rc == 0 )) || (( _FX_FIXED )) } && return
   [[ -z "$_FX_LAST" ]] && return
   _FX_LASTFAIL="$_FX_LAST (exit $rc)"          # remember for the `fix` command
-  local -a w; w=(${(z)_FX_LAST}); _FX_LAST=""
-  _fx_fix_failed_line "$rc" "${w[@]}"
+  local line="$_FX_LAST"; _FX_LAST=""
+  _fx_fix_failed_line "$rc" "$line"
 }
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec _fx_preexec
