@@ -7,7 +7,7 @@ Thanks for helping improve dum-tum. Changes should keep ordinary shell input uns
 Required tools:
 
 - Python 3
-- zsh 5+ or Bash 4+
+- zsh 5+ and Bash (Bash 4+ for the Bash PTY tests)
 - curl
 - shellcheck
 - Node.js 14+ for npm packaging checks
@@ -28,7 +28,7 @@ Every pull request triggers `.github/workflows/ci.yml`. The Linux job installs a
 
 `tests/test_shell_interactive.py` launches real interactive shells in pseudo-terminals. It verifies that Enter runs a confirmed suggestion through the normal shell editor, cancel does not execute it, edit keeps the suggestion changeable, and ordinary commands bypass AI handling.
 
-The test for an unavailable shell is skipped. On macOS, zsh runs locally while the system Bash 3.2 is skipped. Exercise Bash 5 in a clean Linux container with:
+Individual PTY tests skip unavailable shells, but the full suite requires both Bash and zsh and fails if zsh or shellcheck is missing. On macOS, zsh runs locally while the system Bash 3.2 is skipped. Exercise Bash 5 in a clean Linux container with:
 
 ```bash
 docker run --rm \
