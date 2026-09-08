@@ -369,6 +369,21 @@ class InteractiveAdapterTest(unittest.TestCase):
                     session.close()
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_failed_ai_restores_input(self):
+        self.shell = ShellSession([shutil.which("zsh"), "-f"], self.tempdir.name)
+        self.shell.command(f"source {shlex.quote(str(ROOT / 'src/fixit.zsh'))}")
+        self.shell.command(
+            "_fx_ai_ready() { return 0; }; "
+            "_fx_ai() { print -u2 'Error: context canceled'; return 1; }"
+        )
+        self.shell.send("list all the files\r")
+        output = self.shell.read_until("Error: context canceled")
+        output += self.shell.read_until_idle(PROMPT)
+        self.assertIn("list all the files", output.split(PROMPT)[-1])
+        self.shell.send("\x15")
+        self.assertIn("RECOVERED", self.shell.command("print RECOVERED"))
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_upgrade_from_legacy_accept_line(self):
         self.shell = ShellSession([shutil.which("zsh"), "-f"], self.tempdir.name)
         self.shell.command(
