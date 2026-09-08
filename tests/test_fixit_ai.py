@@ -14,6 +14,31 @@ fixit_ai = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixit_ai)
 
 
+class SecretReviewTest(unittest.TestCase):
+    def test_qualified_names(self):
+        for name in ("GITHUB_TOKEN_PROD", "OPENAI_API_KEY_BACKUP", "MY_SECRET_VALUE"):
+            self.assertNotIn("sensitive-value", fixit_ai.redact_secrets(name + "=sensitive-value"))
+
+    def test_parameterized_auth(self):
+        for scheme in ("AWS4-HMAC-SHA256", "Digest"):
+            value = 'curl -H "Authorization: ' + scheme + ' Credential=private, Signature=signed-secret"'
+            self.assertNotIn("signed-secret", fixit_ai.redact_secrets(value))
+
+    def test_digest_with_quoted_parameters(self):
+        value = "curl -H 'Authorization: Digest username=\"user\", nonce=\"private-nonce\", response=\"signed-secret\"' https://example.com"
+        redacted = fixit_ai.redact_secrets(value)
+        self.assertNotIn("private-nonce", redacted)
+        self.assertNotIn("signed-secret", redacted)
+        self.assertIn("https://example.com", redacted)
+
+    def test_compact_quoted_labels(self):
+        self.assertEqual(fixit_ai.redact_secrets('{"token":"private-value"}'), '{"token":"[REDACTED]"}')
+
+    def test_script_names(self):
+        for value in ("npm run secret:scan", "make token:refresh"):
+            self.assertEqual(value, fixit_ai.redact_secrets(value))
+
+
 class TestHeadOf(unittest.TestCase):
     def test_plain_command(self):
         self.assertEqual(fixit_ai.head_of("ls -la"), "ls")
@@ -42,6 +67,213 @@ class TestHeadOf(unittest.TestCase):
 
     def test_sudo_no_args(self):
         self.assertEqual(fixit_ai.head_of("sudo "), "sudo")
+
+
+class TestRcExportValue(unittest.TestCase):
+    def test_reads_only_inside_single_complete_managed_block(self):
+        text = "\n".join(
+            (
+                "export FX_PROVIDER='before'",
+                "# >>> fixit.zsh >>>",
+                "export FX_PROVIDER='openai'",
+                "# <<< fixit.zsh <<<",
+                "export FX_PROVIDER='after'",
+            )
+        )
+        self.assertEqual(fixit_ai.rc_export_value(text, "FX_PROVIDER"), "openai")
+
+    def test_rejects_absent_unbalanced_reversed_and_duplicate_blocks(self):
+        cases = (
+            "export FX_PROVIDER='outside'\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n",
+            "export FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n",
+            "# <<< fixit.zsh <<<\nexport FX_PROVIDER='openai'\n# >>> fixit.zsh >>>\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# >>> fixit.zsh >>>\n# <<< fixit.zsh <<<\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n# <<< fixit.zsh <<<\n",
+            "# >>> fixit.zsh >>>\nexport FX_PROVIDER='openai'\n# <<< fixit.zsh <<<\n# >>> fixit.zsh >>>\nexport FX_PROVIDER='anthropic'\n# <<< fixit.zsh <<<\n",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(fixit_ai.rc_export_value(text, "FX_PROVIDER"), "")
+
+    def test_does_not_read_export_after_end_marker(self):
+        text = "\n".join(
+            (
+                "# >>> fixit.zsh >>>",
+                "export FX_MODEL='inside'",
+                "# <<< fixit.zsh <<<",
+                "export OPENAI_API_KEY='after'",
+            )
+        )
+        self.assertEqual(fixit_ai.rc_export_value(text, "OPENAI_API_KEY"), "")
+
+
+class TestHelpOptions(unittest.TestCase):
+    def check(self, help_text, *options):
+        import io
+
+        old_stdin = sys.stdin
+        sys.stdin = io.StringIO(help_text)
+        try:
+            return fixit_ai.cmd_help_options(list(options))
+        finally:
+            sys.stdin = old_stdin
+
+    def test_real_option_declarations_and_values_are_accepted(self):
+        help_text = """Options:
+  -s, --sandbox <MODE>
+          Sandbox mode (possible values: read-only, workspace-write)
+      --ignore-user-config
+          Ignore user configuration
+      --ephemeral  Run without persistence
+"""
+        self.assertEqual(
+            self.check(
+                help_text,
+                "--sandbox=read-only",
+                "--ignore-user-config",
+                "--ephemeral",
+            ),
+            0,
+        )
+
+    def test_indented_description_examples_are_not_declarations(self):
+        help_text = """Options:
+  --legacy <TEXT>  Deprecated; old examples include:
+      --sandbox read-only
+      --ignore-user-config
+      --ignore-rules
+      --ephemeral
+"""
+        self.assertEqual(
+            self.check(
+                help_text,
+                "--sandbox=read-only",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--ephemeral",
+            ),
+            1,
+        )
+
+    def test_nested_option_value_does_not_apply_to_preceding_option(self):
+        help_text = """Options:
+  --sandbox <MODE>
+    --legacy <MODE>  choices: read-only
+  --ignore-user-config
+  --ignore-rules
+  --ephemeral
+"""
+        self.assertEqual(
+            self.check(
+                help_text,
+                "--sandbox=read-only",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--ephemeral",
+            ),
+            1,
+        )
+
+    def test_space_separated_option_mentions_are_not_alias_declarations(self):
+        self.assertEqual(self.check("--pure --format\n", "--pure", "--format"), 1)
+
+    def test_example_section_is_not_an_option_section(self):
+        help_text = """Examples:
+  --sandbox
+  --mode <MODE>  plan
+  --disable-slash-commands
+"""
+        self.assertEqual(
+            self.check(
+                help_text, "--sandbox", "--mode=plan", "--disable-slash-commands"
+            ),
+            1,
+        )
+
+
+class TestSecretRedaction(unittest.TestCase):
+    def test_positive_matrix(self):
+        cases = (
+            (
+                'export OPENAI_API_KEY = "alpha beta gamma"',
+                'export OPENAI_API_KEY = "[REDACTED]"',
+            ),
+            (
+                "MY_SECRET_TOKEN = 'one two three'",
+                "MY_SECRET_TOKEN = '[REDACTED]'",
+            ),
+            ("PASSWORD=hunter2", "PASSWORD=[REDACTED]"),
+            (
+                'deploy --api-key "flag value with spaces" --force',
+                'deploy --api-key "[REDACTED]" --force',
+            ),
+            (
+                "deploy --apikey = 'another flag value' --force",
+                "deploy --apikey = '[REDACTED]' --force",
+            ),
+            (
+                'curl -H "Authorization: Bearer abc.def.ghi" example.com',
+                'curl -H "Authorization: Bearer [REDACTED]" example.com',
+            ),
+            (
+                'curl -H "X-API-Key: header-secret" example.com',
+                'curl -H "X-API-Key: [REDACTED]" example.com',
+            ),
+            (
+                "postgresql://alice:s3cr3t@db.local/app",
+                "postgresql://alice:[REDACTED]@db.local/app",
+            ),
+            ('password: "open sesame"', 'password: "[REDACTED]"'),
+            ('"client_secret": "json value"', '"client_secret": "[REDACTED]"'),
+            (
+                "token=abc123&safe=true",
+                "token=[REDACTED]&safe=true",
+            ),
+            (
+                "key sk-abcdefghijklmnop here",
+                "key [REDACTED-KEY] here",
+            ),
+            (
+                "aws AKIAIOSFODNN7EXAMPLE here",
+                "aws [REDACTED-KEY] here",
+            ),
+            (
+                "github ghp_abcdefghijklmnopqrstuvwxyz here",
+                "github [REDACTED-KEY] here",
+            ),
+        )
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertTrue(fixit_ai.has_secrets(raw))
+                self.assertEqual(fixit_ai.redact_secrets(raw), expected)
+                self.assertFalse(fixit_ai.has_secrets(expected))
+
+    def test_negative_matrix(self):
+        cases = (
+            "git push origin main",
+            "curl --password",
+            "curl -H 'Authorization: Bearer' example.com",
+            "token_count=800",
+            "monkey=banana",
+            "passwordless=true",
+            "https://example.com/path",
+            "api key rotation policy",
+            "sk-short",
+            "AKIA is an AWS key prefix",
+        )
+        for raw in cases:
+            with self.subTest(raw=raw):
+                self.assertFalse(fixit_ai.has_secrets(raw))
+                self.assertEqual(fixit_ai.redact_secrets(raw), raw)
+
+    def test_multiple_values_are_fully_redacted(self):
+        raw = "API_KEY='first value' password: \"second value\" https://u:third@host/x"
+        expected = (
+            "API_KEY='[REDACTED]' password: \"[REDACTED]\" "
+            "https://u:[REDACTED]@host/x"
+        )
+        self.assertEqual(fixit_ai.redact_secrets(raw), expected)
 
 
 class TestRepairFailedLine(unittest.TestCase):
@@ -115,6 +347,16 @@ class TestRepairFailedLine(unittest.TestCase):
 
 
 class TestExtract(unittest.TestCase):
+    def test_outer_quotes_and_literal_argument(self):
+        self.assertEqual(fixit_ai.extract('"ls -la"'), 'ls -la')
+        self.assertEqual(fixit_ai.extract("ls 'file name'"), "ls 'file name'")
+
+    def test_shell_supplied_names(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ, {"FX_COMMAND_NAMES": "my_alias\nmy_function"}):
+            self.assertEqual(fixit_ai.extract("my_alias status"), "my_alias status")
+            self.assertEqual(fixit_ai.extract("my_function argument"), "my_function argument")
+
     def test_simple_command(self):
         self.assertEqual(fixit_ai.extract("ls -la"), "ls -la")
 
@@ -180,11 +422,27 @@ class TestExtract(unittest.TestCase):
 
     def test_danger_without_following_command(self):
         out = fixit_ai.extract("# DANGER: deletes everything")
-        self.assertEqual(out, "# DANGER: deletes everything")
+        self.assertEqual(out, "")
 
     def test_danger_not_first_line(self):
         out = fixit_ai.extract("Here is the fix\n# DANGER: wipes data\nrm -rf /tmp/x")
         self.assertEqual(out, "# DANGER: wipes data\nrm -rf /tmp/x")
+
+    def test_danger_stays_attached_to_backticked_command(self):
+        out = fixit_ai.extract(
+            "# DANGER: wipes data\n`rm -rf /tmp/x`\nSafer option: `ls /tmp/x`"
+        )
+        self.assertEqual(out, "# DANGER: wipes data\nrm -rf /tmp/x")
+
+    def test_danger_requires_a_command_next(self):
+        out = fixit_ai.extract("# DANGER: wipes data\nThis would delete the directory")
+        self.assertEqual(out, "")
+
+    def test_unknown_prose_is_not_a_command(self):
+        self.assertEqual(fixit_ai.extract("Certainly delete all generated files"), "")
+
+    def test_known_single_word_command_is_accepted(self):
+        self.assertEqual(fixit_ai.extract("date"), "date")
 
     def test_whitespace_only_input(self):
         self.assertEqual(fixit_ai.extract("   \n\t\n  "), "")
@@ -198,175 +456,206 @@ class TestExtract(unittest.TestCase):
 
 class TestParsePayload(unittest.TestCase):
     def test_plain_text_passthrough(self):
-        self.assertEqual(fixit_ai.parse_payload("ls -la"), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload("ls -la", "plain"), "ls -la")
 
     def test_empty(self):
-        self.assertEqual(fixit_ai.parse_payload(""), "")
-        self.assertEqual(fixit_ai.parse_payload("   \n  "), "")
+        for provider in ("plain", "chat", "anthropic", "gemini", "opencode", "claude",
+                         "antigravity"):
+            self.assertEqual(fixit_ai.parse_payload("", provider), "")
+            self.assertEqual(fixit_ai.parse_payload("   \n  ", provider), "")
 
     def test_openrouter_chat_completion(self):
         body = json.dumps({
             "choices": [{"message": {"role": "assistant", "content": "ls -la"}}]
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "ls -la")
+
+    def test_chat_visible_text_parts_are_joined(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": [
+                {"type": "text", "text": "git"},
+                {"type": "text", "text": " status"},
+            ]}}]
+        })
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "git status")
 
     def test_error_payload_reports_and_returns_empty(self):
+        import io
+        from contextlib import redirect_stderr
         body = json.dumps({"error": {"message": "invalid api key"}})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
+        self.assertIn("AI error: invalid api key", stderr.getvalue())
 
-    def test_jsonl_stream_concatenated(self):
+    def test_opencode_stream_fragments_preserve_token_order(self):
         lines = "\n".join([
-            json.dumps({"text": "ls"}),
-            json.dumps({"text": " -la"}),
+            json.dumps({"type": "step_start", "reasoning": "rm -rf /"}),
+            json.dumps({"type": "text", "part": {"type": "text", "text": "git"}}),
+            json.dumps({"type": "text", "part": {"type": "text", "text": " status"}}),
         ])
-        self.assertEqual(fixit_ai.parse_payload(lines), "ls\n -la")
+        self.assertEqual(fixit_ai.parse_payload(lines, "opencode"), "git status")
 
-    def test_single_json_line(self):
-        line = json.dumps({"part": {"text": "pwd"}})
-        self.assertEqual(fixit_ai.parse_payload(line), "pwd")
+    def test_opencode_requires_text_event(self):
+        line = json.dumps({"type": "reasoning", "part": {"type": "text", "text": "rm -rf /"}})
+        self.assertEqual(fixit_ai.parse_payload(line, "opencode"), "")
 
-    def test_invalid_json_returned_raw(self):
+    def test_invalid_json_fails_closed(self):
         raw = "{not valid json"
-        self.assertEqual(fixit_ai.parse_payload(raw), raw)
+        self.assertEqual(fixit_ai.parse_payload(raw, "chat"), "")
 
     def test_error_string_payload(self):
         body = json.dumps({"error": "rate limited"})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_error_with_choices_not_treated_as_error(self):
+    def test_error_with_choices_still_fails_closed(self):
         body = json.dumps({
             "error": {"message": "partial"},
             "choices": [{"message": {"content": "ls -la"}}],
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_jsonl_error_midstream_aborts(self):
+    def test_opencode_error_midstream_aborts(self):
         lines = "\n".join([
-            json.dumps({"text": "ls"}),
+            json.dumps({"type": "text", "part": {"type": "text", "text": "ls"}}),
             json.dumps({"error": {"message": "boom"}}),
         ])
-        self.assertEqual(fixit_ai.parse_payload(lines), "")
+        self.assertEqual(fixit_ai.parse_payload(lines, "opencode"), "")
 
-    def test_jsonl_multiple_json_no_text_returns_empty(self):
-        lines = "\n".join([
-            json.dumps({"id": 1}),
-            json.dumps({"id": 2}),
-        ])
-        self.assertEqual(fixit_ai.parse_payload(lines), "")
-
-    def test_json_array_payload(self):
-        body = json.dumps([{"text": "git"}, {"text": " status"}])
-        self.assertEqual(fixit_ai.parse_payload(body), "git\n status")
-
-    def test_choices_empty_content_falls_back_to_collect(self):
+    def test_hidden_reasoning_is_never_visible_chat_output(self):
         body = json.dumps({
             "choices": [{"message": {"content": "  ", "reasoning": "ls -la"}}]
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "  ")
+
+    def test_reasoning_details_are_never_visible_chat_output(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": "", "reasoning_details": [
+                {"text": "rm -rf /"}
+            ]}}]
+        })
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
     def test_choices_missing_message(self):
         body = json.dumps({"choices": [{}]})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
     def test_empty_choices_array(self):
         body = json.dumps({"choices": []})
-        self.assertEqual(fixit_ai.parse_payload(body), "")
+        self.assertEqual(fixit_ai.parse_payload(body, "chat"), "")
 
-    def test_nested_content_dict(self):
-        body = json.dumps({"message": {"content": {"text": "pwd"}}})
-        self.assertEqual(fixit_ai.parse_payload(body), "pwd")
+    def test_malformed_choices_shapes_fail_closed(self):
+        payloads = [
+            {"choices": "not-a-list"},
+            {"choices": [None]},
+            {"choices": [{"message": "not-an-object"}]},
+            {"choices": [{"message": {"content": {"text": "pwd"}}}]},
+            {"choices": [{"message": {"content": [{"type": "text", "text": 7}]}}]},
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                self.assertEqual(fixit_ai.parse_payload(json.dumps(payload), "chat"), "")
 
-    def test_reasoning_details_collected(self):
-        body = json.dumps({"reasoning_details": [{"text": "ls -la"}]})
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
-
-    def test_part_content_key(self):
-        line = json.dumps({"part": {"content": "mkdir foo"}})
-        self.assertEqual(fixit_ai.parse_payload(line), "mkdir foo")
-
-    def test_claude_result_shape(self):
+    def test_claude_result_uses_only_visible_result(self):
         body = json.dumps({
             "type": "result",
             "subtype": "success",
             "is_error": False,
             "result": "ls -la",
+            "reasoning": "rm -rf /",
+            "reasoning_details": [{"text": "rm -rf /"}],
             "session_id": "abc123",
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "claude"), "ls -la")
+
+    def test_claude_error_result_is_not_executable(self):
+        body = json.dumps({
+            "type": "result", "subtype": "error", "is_error": True, "result": "rm -rf /"
+        })
+        self.assertEqual(fixit_ai.parse_payload(body, "claude"), "")
 
     def test_antigravity_stream_result_shape(self):
+        body = "\n".join([
+            json.dumps({"event": "assistant", "reasoning": "rm -rf /"}),
+            json.dumps({
+                "event": "result",
+                "result": {"status": "SUCCESS", "response": "ls -la\n"},
+            }),
+        ])
+        self.assertEqual(fixit_ai.parse_payload(body, "antigravity"), "ls -la\n")
+
+    def test_antigravity_non_success_is_not_executable(self):
         body = json.dumps({
             "event": "result",
-            "result": {"status": "SUCCESS", "response": "ls -la\n"},
+            "result": {"status": "FAILED", "response": "rm -rf /"},
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la\n")
+        self.assertEqual(fixit_ai.parse_payload(body, "antigravity"), "")
 
-    def test_non_json_mixed_lines_passthrough(self):
-        raw = "some prose\nls -la"
-        self.assertEqual(fixit_ai.parse_payload(raw), raw)
-
-    def test_scalar_json_returned_raw(self):
-        raw = "123"
-        self.assertEqual(fixit_ai.parse_payload(raw), raw)
-
-    def test_anthropic_messages_response(self):
+    def test_anthropic_uses_text_and_ignores_thinking(self):
         body = json.dumps({
-            "content": [{"type": "text", "text": "ls -la"}],
+            "content": [
+                {"type": "thinking", "thinking": "rm -rf /"},
+                {"type": "text", "text": "git"},
+                {"type": "text", "text": " status"},
+            ],
             "stop_reason": "end_turn",
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "anthropic"), "git status")
 
-    def test_gemini_generate_content_response(self):
+    def test_gemini_uses_visible_parts_and_ignores_thoughts(self):
         body = json.dumps({
-            "candidates": [{"content": {"parts": [{"text": "ls -la"}]}}]
+            "candidates": [{"content": {"parts": [
+                {"thought": True, "text": "rm -rf /"},
+                {"text": "git"},
+                {"text": " status"},
+            ]}}]
         })
-        self.assertEqual(fixit_ai.parse_payload(body), "ls -la")
+        self.assertEqual(fixit_ai.parse_payload(body, "gemini"), "git status")
 
+    def test_provider_shape_is_not_guessed(self):
+        body = json.dumps({"reasoning_details": [{"text": "rm -rf /"}]})
+        for provider in ("chat", "anthropic", "gemini", "opencode", "claude",
+                         "antigravity"):
+            with self.subTest(provider=provider):
+                self.assertEqual(fixit_ai.parse_payload(body, provider), "")
 
-class TestCollectText(unittest.TestCase):
-    def test_plain_string(self):
-        parts = []
-        fixit_ai.collect_text("hello", parts)
-        self.assertEqual(parts, ["hello"])
-
-    def test_blank_strings_ignored(self):
-        parts = []
-        fixit_ai.collect_text("   ", parts)
-        self.assertEqual(parts, [])
-
-    def test_nested_list(self):
-        parts = []
-        fixit_ai.collect_text([{"text": "a"}, ["b", {"content": "c"}]], parts)
-        self.assertEqual(parts, ["a", "b", "c"])
-
-    def test_non_string_scalars_ignored(self):
-        parts = []
-        fixit_ai.collect_text({"text": 42, "content": None, "ok": True}, parts)
-        self.assertEqual(parts, [])
-
-    def test_delta_streaming_shape(self):
-        parts = []
-        fixit_ai.collect_text({"delta": {"content": "ls"}}, parts)
-        self.assertEqual(parts, ["ls"])
+    def test_unknown_provider_kind_fails_closed(self):
+        self.assertEqual(fixit_ai.parse_payload("ls -la", "mystery"), "")
 
 
 class TestBodyCommand(unittest.TestCase):
-    def test_body_json_structure(self):
+    def _body(self, command, model):
+        import io
+        from contextlib import redirect_stdout
         os.environ.update({
-            "FX_MODEL": "test/model",
+            "FX_MODEL": model,
             "FX_SYS": "sys prompt",
             "FX_USER": "user prompt",
         })
-        import io
-        from contextlib import redirect_stdout
         buf = io.StringIO()
         with redirect_stdout(buf):
-            fixit_ai.cmd_body()
-        body = json.loads(buf.getvalue())
-        self.assertEqual(body["model"], "test/model")
-        self.assertEqual(body["max_tokens"], 800)
+            command()
+        return json.loads(buf.getvalue())
+
+    def _assert_messages(self, body):
         self.assertEqual(body["messages"][0], {"role": "system", "content": "sys prompt"})
         self.assertEqual(body["messages"][1], {"role": "user", "content": "user prompt"})
+
+    def test_openrouter_body_uses_compatible_token_parameter(self):
+        body = self._body(fixit_ai.cmd_body_openrouter, "test/model")
+        self.assertEqual(body["model"], "test/model")
+        self.assertEqual(body["max_tokens"], 800)
+        self.assertNotIn("max_completion_tokens", body)
+        self._assert_messages(body)
+
+    def test_openai_bodies_use_supported_token_parameter(self):
+        for model in ("gpt-4o-mini", "gpt-4o", "gpt-5-mini"):
+            with self.subTest(model=model):
+                body = self._body(fixit_ai.cmd_body_openai, model)
+                self.assertEqual(body["model"], model)
+                self.assertEqual(body["max_completion_tokens"], 800)
+                self.assertNotIn("max_tokens", body)
+                self._assert_messages(body)
 
     def test_body_anthropic_structure(self):
         os.environ.update({
@@ -421,7 +710,7 @@ class TestBodyCommand(unittest.TestCase):
 
 
 class TestExtractCommand(unittest.TestCase):
-    def _run_extract(self, stdin_text):
+    def _run_extract(self, stdin_text, provider="plain"):
         import io
         from contextlib import redirect_stdout
         old_stdin = sys.stdin
@@ -429,7 +718,7 @@ class TestExtractCommand(unittest.TestCase):
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
-                fixit_ai.cmd_extract()
+                fixit_ai.cmd_extract(provider)
         finally:
             sys.stdin = old_stdin
         return buf.getvalue()
@@ -439,7 +728,13 @@ class TestExtractCommand(unittest.TestCase):
 
     def test_extract_json_payload(self):
         body = json.dumps({"choices": [{"message": {"content": "git status"}}]})
-        self.assertEqual(self._run_extract(body), "git status\n")
+        self.assertEqual(self._run_extract(body, "chat"), "git status\n")
+
+    def test_extract_hidden_reasoning_prints_nothing(self):
+        body = json.dumps({
+            "choices": [{"message": {"content": "", "reasoning": "rm -rf /"}}]
+        })
+        self.assertEqual(self._run_extract(body, "chat"), "")
 
     def test_extract_no_command_prints_nothing(self):
         self.assertEqual(self._run_extract("just some prose"), "")
@@ -499,19 +794,29 @@ class TestMain(unittest.TestCase):
             sys.argv, sys.stdin = old_argv, old_stdin
         self.assertEqual(buf.getvalue(), "pwd\n")
 
-    def test_main_body_mode(self):
+    def _main_body(self, mode):
         import io
         from contextlib import redirect_stdout
         os.environ.update({"FX_MODEL": "m", "FX_SYS": "s", "FX_USER": "u"})
         old_argv = sys.argv
-        sys.argv = ["fixit-ai.py", "body"]
+        sys.argv = ["fixit-ai.py", mode]
         buf = io.StringIO()
         try:
             with redirect_stdout(buf):
                 fixit_ai.main()
         finally:
             sys.argv = old_argv
-        self.assertEqual(json.loads(buf.getvalue())["model"], "m")
+        return json.loads(buf.getvalue())
+
+    def test_main_openai_body_mode(self):
+        body = self._main_body("body-openai")
+        self.assertEqual(body["model"], "m")
+        self.assertEqual(body["max_completion_tokens"], 800)
+
+    def test_main_legacy_body_alias_keeps_openrouter_compatibility(self):
+        body = self._main_body("body")
+        self.assertEqual(body["model"], "m")
+        self.assertEqual(body["max_tokens"], 800)
 
 
 if __name__ == "__main__":

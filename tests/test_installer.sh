@@ -5,6 +5,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 
+provider_fixture_bin="$TMPD/provider-fixtures"
+mkdir -p "$provider_fixture_bin"
+for provider_cli in codex opencode; do
+  printf '%s\n' '#!/bin/sh' 'exit 1' > "$provider_fixture_bin/$provider_cli"
+  chmod +x "$provider_fixture_bin/$provider_cli"
+done
+provider_fixture_path="$provider_fixture_bin:/usr/bin:/bin"
+
 assert_runtime_matches_repo() {
   local install_dir="$1" f
   for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
@@ -33,7 +41,7 @@ run_local_install() {
   env \
     HOME="$home" \
     FIXIT_HOME="$install_dir" \
-    PATH=/usr/bin:/bin \
+    PATH="$provider_fixture_path" \
     SHELL=/bin/bash \
     "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell "$shell_choice"
 }
@@ -50,7 +58,7 @@ remote_output="$TMPD/remote-output"
     HOME="$TMPD/remote-home" \
     FIXIT_HOME="$TMPD/remote-install" \
     FIXIT_RAW="file://$ROOT" \
-    PATH=/usr/bin:/bin \
+    PATH="$provider_fixture_path" \
     SHELL=/bin/bash \
     /bin/bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash \
       < "$ROOT/install.sh" > "$remote_output"
@@ -66,7 +74,7 @@ env \
   HOME="$TMPD/local-home" \
   FIXIT_HOME="$TMPD/local-install" \
   FIXIT_RAW=file:///does-not-exist \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/local-output"
@@ -85,7 +93,7 @@ mkdir -p "$special_home"
 env \
   HOME="$special_home" \
   FIXIT_HOME="$special_install" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
     --model "$special_model" --variant "$special_variant" --shell both \
@@ -103,10 +111,11 @@ mkdir -p "$key_home"
 env \
   HOME="$key_home" \
   FIXIT_HOME="$TMPD/key-install" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
+  OPENROUTER_API_KEY="$special_key" \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --model "$special_model" --key "$special_key" --shell both \
+    --model "$special_model" --shell both \
     > "$TMPD/key-output"
 assert_config_round_trip /bin/bash "$key_home/.bashrc" openrouter "$special_model" "" "$special_key"
 assert_config_round_trip "$(command -v zsh)" "$key_home/.zshrc" openrouter "$special_model" "" "$special_key"
@@ -117,7 +126,7 @@ mkdir -p "$TMPD/newline-home"
 if env \
   HOME="$TMPD/newline-home" \
   FIXIT_HOME="$TMPD/newline-install" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
     --model "$newline_model" --shell bash > "$TMPD/newline-output" 2>&1; then
@@ -130,7 +139,7 @@ newline_install="$TMPD/install"$'\n'"target"
 if env \
   HOME="$TMPD/newline-home" \
   FIXIT_HOME="$newline_install" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/newline-path-output" 2>&1; then
@@ -197,10 +206,11 @@ chmod 644 "$uninstall_home/.bashrc" "$uninstall_home/.zshrc"
 env \
   HOME="$uninstall_home" \
   FIXIT_HOME="$TMPD/uninstall-target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
+  OPENROUTER_API_KEY=managed-secret \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --model safe-model --key managed-secret --shell both > "$TMPD/uninstall-install-output"
+    --model safe-model --shell both > "$TMPD/uninstall-install-output"
 [[ "$(file_mode "$uninstall_home/.bashrc")" == 600 ]]
 [[ "$(file_mode "$uninstall_home/.zshrc")" == 600 ]]
 printf '%s\n' "export OPENAI_API_KEY='outside-secret'" "export GOOGLE_API_KEY='outside-google'" \
@@ -209,7 +219,7 @@ chmod 640 "$uninstall_home/.bashrc" "$uninstall_home/.zshrc"
 env \
   HOME="$uninstall_home" \
   FIXIT_HOME="$TMPD/uninstall-target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/uninstall-output"
 [[ ! -e "$TMPD/uninstall-target" ]]
@@ -239,7 +249,7 @@ printf 'before-byte-block\nafter-byte-block-no-newline' > "$byte_home/expected"
 env \
   HOME="$byte_home" \
   FIXIT_HOME="$TMPD/byte-uninstall-target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/byte-uninstall-output"
 cmp "$byte_home/expected" "$byte_home/.bashrc"
@@ -249,7 +259,7 @@ mkdir -p "$noop_home"
 env \
   HOME="$noop_home" \
   FIXIT_HOME="$TMPD/noop-target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/noop-output"
 [[ ! -e "$noop_home/.zshrc" && ! -e "$noop_home/.bashrc" && ! -e "$TMPD/noop-target" ]]
@@ -268,7 +278,7 @@ cp "$preflight_home/.bashrc" "$preflight_home/bashrc-original"
 if env \
   HOME="$preflight_home" \
   FIXIT_HOME="$TMPD/uninstall-preflight-target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/uninstall-preflight-output" 2>&1; then
   exit 1
@@ -285,7 +295,7 @@ assert_uninstall_target_rejected() {
   if ! env \
     HOME="$home" \
     FIXIT_HOME="$target" \
-    PATH=/usr/bin:/bin \
+    PATH="$provider_fixture_path" \
     SHELL=/bin/bash \
     /bin/bash -c '
       library=$1
@@ -338,7 +348,7 @@ cp "$invalid_home/.bashrc" "$invalid_home/bashrc-original"
 if env \
   HOME="$invalid_home" \
   FIXIT_HOME="$unrelated_target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/invalid-target-output" 2>&1; then
   exit 1
@@ -354,7 +364,7 @@ cp "$empty_home/.bashrc" "$empty_home/bashrc-original"
 if env \
   HOME="$empty_home" \
   FIXIT_HOME= \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/empty-target-output" 2>&1; then
   exit 1
@@ -370,7 +380,7 @@ cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
 env \
   HOME="$legacy_home" \
   FIXIT_HOME="$legacy_target" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/legacy-output"
 [[ ! -e "$legacy_target" ]]
@@ -379,14 +389,14 @@ default_home="$TMPD/default-home"
 mkdir -p "$default_home"
 env -u FIXIT_HOME \
   HOME="$default_home" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/default-install-output"
 grep -qxF 'dum-tum-install-v1' "$default_home/.local/share/fixit/.dum-tum-install"
 env -u FIXIT_HOME \
   HOME="$default_home" \
-  PATH=/usr/bin:/bin \
+  PATH="$provider_fixture_path" \
   SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$TMPD/default-uninstall-output"
 [[ ! -e "$default_home/.local/share/fixit" ]]
@@ -398,7 +408,7 @@ fi
 protected_home="$TMPD/protected-install-home"
 mkdir -p "$protected_home"
 if env \
-  HOME="$protected_home" FIXIT_HOME="$protected_home" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$protected_home" FIXIT_HOME="$protected_home" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/protected-home-output" 2>&1; then
   exit 1
@@ -412,7 +422,7 @@ mkdir -p "$protected_work" "$protected_work_home"
 if (
   cd "$protected_work"
   env HOME="$protected_work_home" FIXIT_HOME="$protected_work" \
-    PATH=/usr/bin:/bin SHELL=/bin/bash \
+    PATH="$provider_fixture_path" SHELL=/bin/bash \
     "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash
 ) > "$TMPD/protected-work-output" 2>&1; then
   exit 1
@@ -425,7 +435,7 @@ lexical_home="$TMPD/protected-lexical-home"
 mkdir -p "$lexical_home"
 if env \
   HOME="$lexical_home" FIXIT_HOME="$lexical_home/missing/.." \
-  PATH=/usr/bin:/bin SHELL=/bin/bash \
+  PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/protected-lexical-output" 2>&1; then
   exit 1
@@ -435,7 +445,7 @@ grep -q 'Refusing to install into protected path' "$TMPD/protected-lexical-outpu
 
 empty_home_target="$TMPD/empty-home-safe-target"
 if env \
-  HOME= FIXIT_HOME="$empty_home_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME= FIXIT_HOME="$empty_home_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/empty-home-install-output" 2>&1; then
   exit 1
@@ -444,7 +454,7 @@ grep -q 'HOME must not be empty' "$TMPD/empty-home-install-output"
 [[ ! -e "$empty_home_target" ]]
 
 if env \
-  HOME="$validation_home" FIXIT_HOME=/private/tmp PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$validation_home" FIXIT_HOME=/private/tmp PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/dangerous-install-output" 2>&1; then
   exit 1
@@ -452,7 +462,7 @@ fi
 grep -q 'Refusing to install into dangerous path' "$TMPD/dangerous-install-output"
 
 if env \
-  HOME="$validation_home" FIXIT_HOME="$ROOT" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$validation_home" FIXIT_HOME="$ROOT" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$TMPD/source-install-output" 2>&1; then
   exit 1
@@ -468,7 +478,7 @@ cp "$ROOT/src/fixit-common.sh" "$ROOT/src/fixit.zsh" "$ROOT/src/fixit.bash" \
 ln -s "$source_alias_real" "$source_alias_link"
 if env \
   HOME="$validation_home" FIXIT_HOME="$source_alias_real" \
-  PATH=/usr/bin:/bin SHELL=/bin/bash \
+  PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$source_alias_link/install.sh" --yes --skip-deps --skip-ai-test \
     --provider none --shell bash > "$TMPD/source-alias-output" 2>&1; then
   exit 1
@@ -482,7 +492,7 @@ run_clean_upgrade() {
     -u GEMINI_API_KEY -u GOOGLE_API_KEY \
     HOME="$home" \
     FIXIT_HOME="$install_dir" \
-    PATH=/usr/bin:/bin \
+    PATH="$provider_fixture_path" \
     SHELL="$login_shell" \
     "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --shell "$shell_choice" > "$output"
 }
@@ -491,9 +501,10 @@ bash_preserve_home="$TMPD/bash-preserve-home"
 bash_preserve_target="$TMPD/bash-preserve-target"
 mkdir -p "$bash_preserve_home"
 env \
-  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
+  OPENROUTER_API_KEY=bash-preserved-key \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --model bash-preserved-model --key bash-preserved-key --shell bash > "$TMPD/bash-seed-output"
+    --model bash-preserved-model --shell bash > "$TMPD/bash-seed-output"
 run_clean_upgrade "$bash_preserve_home" "$bash_preserve_target" /bin/bash bash "$TMPD/bash-upgrade-output"
 assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" openrouter \
   bash-preserved-model "" bash-preserved-key
@@ -504,7 +515,7 @@ zsh_preserve_home="$TMPD/zsh-preserve-home"
 zsh_preserve_target="$TMPD/zsh-preserve-target"
 mkdir -p "$zsh_preserve_home"
 env \
-  HOME="$zsh_preserve_home" FIXIT_HOME="$zsh_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  HOME="$zsh_preserve_home" FIXIT_HOME="$zsh_preserve_target" PATH="$provider_fixture_path" SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
     --model zsh-preserved-model --variant high --shell zsh > "$TMPD/zsh-seed-output"
 run_clean_upgrade "$zsh_preserve_home" "$zsh_preserve_target" /bin/zsh zsh "$TMPD/zsh-upgrade-output"
@@ -515,11 +526,12 @@ multi_home="$TMPD/multi-rc-home"
 multi_target="$TMPD/multi-rc-target"
 mkdir -p "$multi_home"
 env \
-  HOME="$multi_home" FIXIT_HOME="$multi_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$multi_home" FIXIT_HOME="$multi_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
+  OPENROUTER_API_KEY=bash-priority-key \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --model bash-priority-model --key bash-priority-key --shell bash > "$TMPD/multi-bash-output"
+    --model bash-priority-model --shell bash > "$TMPD/multi-bash-output"
 env \
-  HOME="$multi_home" FIXIT_HOME="$multi_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  HOME="$multi_home" FIXIT_HOME="$multi_target" PATH="$provider_fixture_path" SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
     --model zsh-secondary-model --variant medium --shell zsh > "$TMPD/multi-zsh-output"
 run_clean_upgrade "$multi_home" "$multi_target" /bin/bash both "$TMPD/multi-upgrade-output"
@@ -532,11 +544,11 @@ tuple_home="$TMPD/tuple-home"
 tuple_target="$TMPD/tuple-target"
 mkdir -p "$tuple_home"
 env \
-  HOME="$tuple_home" FIXIT_HOME="$tuple_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$tuple_home" FIXIT_HOME="$tuple_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider codex \
     --shell bash > "$TMPD/tuple-bash-output"
 env \
-  HOME="$tuple_home" FIXIT_HOME="$tuple_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  HOME="$tuple_home" FIXIT_HOME="$tuple_target" PATH="$provider_fixture_path" SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider opencode \
     --model secondary-model --variant high --shell zsh > "$TMPD/tuple-zsh-output"
 run_clean_upgrade "$tuple_home" "$tuple_target" /bin/bash both "$TMPD/tuple-upgrade-output"
@@ -551,16 +563,18 @@ key_tuple_home="$TMPD/key-tuple-home"
 key_tuple_target="$TMPD/key-tuple-target"
 mkdir -p "$key_tuple_home"
 env \
-  HOME="$key_tuple_home" FIXIT_HOME="$key_tuple_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$key_tuple_home" FIXIT_HOME="$key_tuple_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
+  OPENROUTER_API_KEY=primary-key \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --key primary-key --shell bash > "$TMPD/key-tuple-bash-output"
+    --shell bash > "$TMPD/key-tuple-bash-output"
 awk '$0 !~ /^export OPENROUTER_API_KEY=/' "$key_tuple_home/.bashrc" \
   > "$key_tuple_home/.bashrc.without-key"
 mv "$key_tuple_home/.bashrc.without-key" "$key_tuple_home/.bashrc"
 env \
-  HOME="$key_tuple_home" FIXIT_HOME="$key_tuple_target" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  HOME="$key_tuple_home" FIXIT_HOME="$key_tuple_target" PATH="$provider_fixture_path" SHELL=/bin/zsh \
+  OPENROUTER_API_KEY=secondary-key \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --key secondary-key --shell zsh > "$TMPD/key-tuple-zsh-output"
+    --shell zsh > "$TMPD/key-tuple-zsh-output"
 run_clean_upgrade "$key_tuple_home" "$key_tuple_target" /bin/bash both \
   "$TMPD/key-tuple-upgrade-output"
 assert_config_round_trip /bin/bash "$key_tuple_home/.bashrc" none "" "" ""
@@ -572,27 +586,29 @@ fi
 
 env \
   FX_PROVIDER=codex FX_MODEL=environment-model FX_VARIANT=environment-variant \
-  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --model cli-model --variant cli-variant \
     --shell bash > "$TMPD/precedence-output"
 assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" codex cli-model cli-variant ""
 
 env \
   OPENROUTER_API_KEY=environment-key \
-  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$bash_preserve_home" FIXIT_HOME="$bash_preserve_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --model key-model --key cli-key --shell bash > "$TMPD/key-precedence-output"
-assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" openrouter key-model "" cli-key
+    --model key-model --shell bash > "$TMPD/key-precedence-output"
+assert_config_round_trip /bin/bash "$bash_preserve_home/.bashrc" openrouter key-model "" environment-key
 
 smoke_bin="$TMPD/smoke-bin"
 mkdir -p "$smoke_bin"
-printf '%s\n' \
-  '#!/bin/sh' \
-  'if [ "${1:-}" = models ]; then' \
-  "  printf '%s\\n' 'stub/provider-model'" \
-  'else' \
-  "  printf '%s\\n' '{\"content\":\"ls -la\"}'" \
-  'fi' > "$smoke_bin/opencode"
+cat > "$smoke_bin/opencode" <<'SH'
+#!/bin/sh
+case "$1 ${2:-}" in
+  'run --help') printf '%s\n' '  --pure  disable plugins' '  --format <FORMAT>  choices: json' ;;
+  'debug config') printf '%s\n' '{"permission":{"*":"deny"},"tools":{"*":false},"plugin":[]}' ;;
+  models*) printf '%s\n' 'stub/provider-model' ;;
+  *) printf '%s\n' '{"type":"text","part":{"text":"ls -la"}}' ;;
+esac
+SH
 chmod +x "$smoke_bin/opencode"
 smoke_path="$smoke_bin:$(dirname "$(command -v python3)"):/usr/bin:/bin"
 
@@ -675,7 +691,7 @@ darwin_bin="$TMPD/darwin-bin"
 mkdir -p "$darwin_bin"
 printf '%s\n' '#!/bin/sh' 'printf "Darwin\\n"' > "$darwin_bin/uname"
 chmod +x "$darwin_bin/uname"
-darwin_path="$darwin_bin:/usr/bin:/bin"
+darwin_path="$darwin_bin:$provider_fixture_path"
 profile_home="$TMPD/profile-home"
 profile_target="$TMPD/profile-target"
 mkdir -p "$profile_home"
@@ -868,8 +884,9 @@ chmod +x "$rc_commit_bin/mv"
 if env \
   TX_TEST_FAIL_TARGET="$tx_bash_target" TX_TEST_FLAG="$tx_root/rc-commit-failed" \
   HOME="$tx_home" FIXIT_HOME="$tx_install" PATH="$rc_commit_bin:$darwin_path" SHELL=/bin/bash \
+  OPENROUTER_API_KEY=transaction-new-key \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter \
-    --model transaction-new-model --key transaction-new-key --shell both \
+    --model transaction-new-model --shell both \
     > "$tx_root/rc-commit-output" 2>&1; then
   exit 1
 fi
@@ -883,7 +900,7 @@ restore_fail_target="$restore_fail_parent/fixit"
 restore_fail_bin="$restore_fail_root/bin"
 mkdir -p "$restore_fail_home" "$restore_fail_parent" "$restore_fail_bin"
 env \
-  HOME="$restore_fail_home" FIXIT_HOME="$restore_fail_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  HOME="$restore_fail_home" FIXIT_HOME="$restore_fail_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$restore_fail_root/seed-output"
 printf '# previous-runtime\n' >> "$restore_fail_target/fixit-common.sh"
@@ -1024,7 +1041,7 @@ relative_root="$TMPD/relative-fixit-home"
 mkdir -p "$relative_root/home" "$relative_root/work"
 if (
   cd "$relative_root/work"
-  env HOME="$relative_root/home" FIXIT_HOME=runtime PATH=/usr/bin:/bin SHELL=/bin/bash \
+  env HOME="$relative_root/home" FIXIT_HOME=runtime PATH="$provider_fixture_path" SHELL=/bin/bash \
     "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash
 ) > "$relative_root/output" 2>&1; then
   exit 1
@@ -1036,18 +1053,18 @@ exclusive_root="$TMPD/exclusive-runtime"
 exclusive_home="$exclusive_root/home"
 exclusive_target="$exclusive_root/runtime"
 mkdir -p "$exclusive_home"
-env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$exclusive_root/seed-output"
 printf 'must survive\n' > "$exclusive_target/user-data"
 cp -Rp "$exclusive_target" "$exclusive_root/runtime-before"
 cp -p "$exclusive_home/.bashrc" "$exclusive_root/bashrc-before"
-env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$exclusive_root/update-output" 2>&1
 diff -r "$exclusive_root/runtime-before" "$exclusive_target"
 cmp "$exclusive_root/bashrc-before" "$exclusive_home/.bashrc"
-if env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+if env HOME="$exclusive_home" FIXIT_HOME="$exclusive_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --uninstall > "$exclusive_root/uninstall-output" 2>&1; then
   exit 1
 fi
@@ -1071,8 +1088,9 @@ printf '%s\n' \
 chmod +x "$smoke_bin/bash"
 env HOME="$smoke_home" FIXIT_HOME="$smoke_root/runtime" \
   PATH="$smoke_bin:/usr/bin:/bin" SHELL=/bin/bash \
+  OPENROUTER_API_KEY=test-key \
   "$ROOT/install.sh" --yes --skip-deps --provider openrouter --model test-model \
-    --key test-key --shell bash > "$smoke_root/output" 2>&1
+    --shell bash > "$smoke_root/output" 2>&1
 grep -q 'staged smoke failed' "$smoke_root/output"
 grep -q 'AI test returned no command' "$smoke_root/output"
 if grep -q 'AI test OK' "$smoke_root/output"; then
@@ -1084,7 +1102,7 @@ assert_signal_boundary() {
   root="$TMPD/signal-$operation-$boundary"
   local home="$root/home" target="$root/runtime" bin="$root/bin" bashrc
   mkdir -p "$home" "$bin"
-  env HOME="$home" FIXIT_HOME="$target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+  env HOME="$home" FIXIT_HOME="$target" PATH="$provider_fixture_path" SHELL=/bin/bash \
     "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
       > "$root/seed-output"
   cp -Rp "$target" "$root/runtime-before"
@@ -1144,7 +1162,7 @@ partial_home="$partial_root/home"
 partial_target="$partial_root/runtime"
 partial_bin="$partial_root/bin"
 mkdir -p "$partial_home" "$partial_bin"
-env HOME="$partial_home" FIXIT_HOME="$partial_target" PATH=/usr/bin:/bin SHELL=/bin/bash \
+env HOME="$partial_home" FIXIT_HOME="$partial_target" PATH="$provider_fixture_path" SHELL=/bin/bash \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash \
     > "$partial_root/seed-output"
 cp -p "$partial_home/.bashrc" "$partial_root/bashrc-before"
@@ -1225,21 +1243,21 @@ for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py; do
  cp "$ROOT/src/$f" "$TMPD/review-broken-source/src/"
 done
 printf '\nif then\n' >> "$TMPD/review-broken-source/src/fixit.bash"
-if env HOME="$TMPD/review-broken-home" FIXIT_HOME="$TMPD/review-broken-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
+if env HOME="$TMPD/review-broken-home" FIXIT_HOME="$TMPD/review-broken-install" PATH="$provider_fixture_path" SHELL=/bin/bash \
  "$TMPD/review-broken-source/install.sh" --yes --skip-deps --skip-ai-test --provider none --shell bash >/dev/null 2>&1; then exit 1; fi
 [[ ! -e "$TMPD/review-broken-install" ]]
 mkdir -p "$TMPD/review-link-home"
 run_local_install "$TMPD/review-link-home" "$TMPD/review-link-target" bash >/dev/null
 ln -s "$TMPD/review-link-target" "$TMPD/review-link"
 for suffix in / /.; do
- if env HOME="$TMPD/review-link-home" FIXIT_HOME="$TMPD/review-link$suffix" PATH=/usr/bin:/bin \
+ if env HOME="$TMPD/review-link-home" FIXIT_HOME="$TMPD/review-link$suffix" PATH="$provider_fixture_path" \
   "$ROOT/install.sh" --uninstall >/dev/null 2>&1; then exit 1; fi
  assert_runtime_matches_repo "$TMPD/review-link-target"
 done
 mkdir -p "$TMPD/review-partial-home" "$TMPD/review-partial-source/src"
 cp "$ROOT/src/fixit-common.sh" "$TMPD/review-partial-source/src/"
 if env HOME="$TMPD/review-partial-home" FIXIT_HOME="$TMPD/review-partial-install" \
- FIXIT_RAW="file://$TMPD/review-partial-source" PATH=/usr/bin:/bin SHELL=/bin/bash \
+ FIXIT_RAW="file://$TMPD/review-partial-source" PATH="$provider_fixture_path" SHELL=/bin/bash \
  bash -s -- --yes --skip-deps --skip-ai-test --provider none --shell bash < "$ROOT/install.sh" >/dev/null 2>&1; then exit 1; fi
 [[ ! -e "$TMPD/review-partial-install" ]]
 run_local_install "$TMPD/review-partial-home" "$TMPD/review-partial-install" bash >/dev/null
@@ -1256,16 +1274,19 @@ ln "$TMPD/review-hard-home/shared" "$TMPD/review-hard-home/.bashrc"
 if run_local_install "$TMPD/review-hard-home" "$TMPD/review-hard-install" bash >/dev/null 2>&1; then exit 1; fi
 [[ "$TMPD/review-hard-home/shared" -ef "$TMPD/review-hard-home/.bashrc" ]]
 mkdir -p "$TMPD/review-marker-home"
-env HOME="$TMPD/review-marker-home" FIXIT_HOME="$TMPD/review-marker-install" PATH=/usr/bin:/bin SHELL=/bin/bash \
- "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --model '# >>> fixit.zsh >>>' --shell bash >/dev/null
 run_local_install "$TMPD/review-marker-home" "$TMPD/review-marker-install" bash >/dev/null
+cp "$TMPD/review-marker-home/.bashrc" "$TMPD/review-marker-before"
+if env HOME="$TMPD/review-marker-home" FIXIT_HOME="$TMPD/review-marker-install" PATH="$provider_fixture_path" SHELL=/bin/bash \
+ "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider none --model '# >>> fixit.zsh >>>' --shell bash >/dev/null 2>&1; then exit 1; fi
+cmp "$TMPD/review-marker-before" "$TMPD/review-marker-home/.bashrc"
+assert_runtime_matches_repo "$TMPD/review-marker-install"
 mkdir -p "$TMPD/review-key-home"
 review_key="abc'def"
 env HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
-  OPENROUTER_API_KEY="$review_key" PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  OPENROUTER_API_KEY="$review_key" PATH="$provider_fixture_path" SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
 env -u OPENROUTER_API_KEY HOME="$TMPD/review-key-home" FIXIT_HOME="$TMPD/review-key-install" \
-  PATH=/usr/bin:/bin SHELL=/bin/zsh \
+  PATH="$provider_fixture_path" SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider openrouter --model test --shell zsh >/dev/null
 zsh -c 'source "$1"; [[ "$OPENROUTER_API_KEY" == "$2" ]]' zsh "$TMPD/review-key-home/.zshrc" "$review_key"
 

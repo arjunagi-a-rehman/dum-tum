@@ -98,13 +98,17 @@ dum_tum_unload
 ```bash
 ./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
 ./install.sh --yes --provider antigravity
-./install.sh --yes --provider openrouter --key sk-or-v1-...
-./install.sh --yes --provider openai --key sk-...
-./install.sh --yes --provider anthropic --key sk-ant-...
-./install.sh --yes --provider gemini --key AIza...
+./install.sh --yes --provider openrouter
+./install.sh --yes --provider openai
+./install.sh --yes --provider anthropic
+./install.sh --yes --provider gemini
 ./install.sh --yes --provider none          # local typo fixing only
 ./install.sh --uninstall
 ```
+
+For a key-based non-interactive install, provide only the environment variable matching the selected provider: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` (`GOOGLE_API_KEY` is also accepted for Gemini). The removed `--key` option is rejected because command-line values are exposed in shell history and process arguments. To enter a key without echoing it, omit `--yes` and run with the provider only, such as `./install.sh --provider openai`; the installer uses a hidden terminal prompt.
+
+`--skip-ai-test` prevents all provider CLI execution, live model discovery, authentication checks, and network smoke tests. The installer still verifies that a selected local CLI exists on `PATH`; a key-based provider without its matching key is disabled. Choosing `--provider none` performs no AI-provider or model-network activity.
 
 Requires `python3`, `curl`, and either zsh or Bash 4+.
 
@@ -123,13 +127,15 @@ This tool runs things in your shell. That deserves a straight answer about what 
 - **Only read-only commands auto-run.** `ls`, `cat`, `pwd` and friends. Everything else asks.
 - **AI output never auto-runs.** Ever. It always waits for Enter.
 - **Failed-command AI can be disabled.** Eligible failed `git`/`npm`/`docker` and similar commands are sent automatically when `FX_AI_ON_FAIL=1` and AI is configured. Set `FX_AI_ON_FAIL=0` if you only want explicit natural-language requests sent.
-- **Secrets are redacted** before anything leaves the machine — `--password X`, `Bearer X`, `sk-…`, `*_KEY=…`, `*_TOKEN=…`.
+- **Known secret shapes are blocked or redacted** before AI calls. This includes quoted or spaced secret assignments, password/token/API-key flags and labels, authorization and API-key headers, credentials embedded in URLs, and high-confidence provider-key formats such as `sk-…`, GitHub, AWS, Google, Slack, and GitLab tokens.
 - **Local mode is fully offline.** Nothing leaves your machine, period.
-- **Keys don't hit the process table.** API keys and request bodies go to `curl` via stdin, not argv, so they don't show in `ps`. Your rc file is `chmod 600` after install.
+- **Keys aren't passed as process arguments.** The installer accepts them through a hidden prompt or provider-specific environment variable, and HTTP credentials and request bodies reach `curl` through stdin rather than argv. As with any environment-based secret, another process with sufficient permission may still inspect the environment. Your rc file is `chmod 600` after install.
 
-One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. The `claude` and `antigravity` providers send the prompt via stdin, so it is not `ps`-visible. Antigravity runs in an isolated temporary workspace so it cannot change project files before dum-tum shows the confirmation prompt.
+Before sending a prompt to a local CLI backend, dum-tum checks that the installed version exposes the required confinement controls. OpenCode runs without external plugins and with inline deny-all tool and permission configuration; Claude runs in safe, plan mode with no tools or MCP servers; Codex ignores user configuration and rules and uses its read-only sandbox; Antigravity uses plan mode and its terminal sandbox from an isolated temporary workspace. If those controls cannot be verified, dum-tum refuses to invoke that provider. These are the CLIs' documented model-tool boundaries, not an operating-system sandbox around a malicious or compromised CLI executable, which still runs with your user permissions.
 
-What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detected package scripts or Make targets, up to 30 aliases, and the task or failed input. Known secret patterns are redacted, but filenames and command arguments can still be sensitive. Don't put secrets in natural-language prompts, filenames, aliases, or failed commands.
+One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. The `claude` and `antigravity` providers send the prompt via stdin, so it is not `ps`-visible.
+
+What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detected package scripts or Make targets, up to 30 aliases, and the task or failed input. Failed commands matching a known secret pattern are not sent; matching values in other context are redacted. Detection is heuristic: novel, obfuscated, fragmented, or unlabeled secrets may not be recognized, and filenames, aliases, command arguments, and natural-language prompts can still be sensitive. Do not include secrets in data you allow AI mode to send.
 
 ---
 
@@ -140,7 +146,7 @@ What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detec
 | `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `codex` · `antigravity` · `none` |
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
-| `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call is killed |
+| `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call and its descendants are killed |
 | `FX_AI_ON_FAIL` | `1` | automatically ask AI to suggest fixes for eligible failed commands |
 | `OPENROUTER_API_KEY` | — | required only for `openrouter` |
 | `OPENAI_API_KEY` | — | required only for `openai` |
