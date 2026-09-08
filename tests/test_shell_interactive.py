@@ -369,6 +369,37 @@ class InteractiveAdapterTest(unittest.TestCase):
                     session.close()
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_upgrade_from_legacy_accept_line(self):
+        self.shell = ShellSession([shutil.which("zsh"), "-f"], self.tempdir.name)
+        self.shell.command(
+            "FX_PROVIDER=none; FUNCNEST=32; "
+            "_fx_accept_line() { zle .accept-line; }; "
+            "zle -N accept-line _fx_accept_line"
+        )
+        self.shell.command(f"source {shlex.quote(str(ROOT / 'src/fixit.zsh'))}")
+        marker = Path(self.tempdir.name) / "upgraded"
+        output = self.shell.command(f"touch {shlex.quote(str(marker))}")
+        self.assertTrue(marker.exists(), output)
+        self.assertNotIn("maximum nested function level", output)
+        self.shell.command("dum_tum_reload; dum_tum_unload")
+        output = self.shell.command("print -r -- RESTORED=${widgets[accept-line]}")
+        self.assertIn("RESTORED=builtin", output)
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_source_repairs_recursive_saved_widget(self):
+        self.shell = ShellSession([shutil.which("zsh"), "-f"], self.tempdir.name)
+        adapter = shlex.quote(str(ROOT / "src/fixit.zsh"))
+        self.shell.command(
+            f"FX_PROVIDER=none; FUNCNEST=32; source {adapter}; "
+            'zle -A accept-line "$_FX_ZSH_SAVED_WIDGET"; '
+            f"source {adapter}"
+        )
+        marker = Path(self.tempdir.name) / "recovered"
+        output = self.shell.command(f"touch {shlex.quote(str(marker))}")
+        self.assertTrue(marker.exists(), output)
+        self.assertNotIn("maximum nested function level", output)
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_hooks_coexist_and_unload_restores_state(self):
         zsh = shutil.which("zsh")
         self.shell = ShellSession([zsh, "-f"], self.tempdir.name)

@@ -351,20 +351,7 @@ _fx_antigravity_ready() {
     return 1
   fi
   unset _FX_ANTIGRAVITY_CONFINEMENT_FAILED
-  [[ "${_FX_ANTIGRAVITY_READY:-}" == "1" ]] && return 0
-  local run_dir rc=0
-  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fixit-agy-ready.XXXXXX")" || return 1
-  (
-    cd "$run_dir" || exit 1
-    _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy -p /usage --output-format text \
-      --sandbox --mode plan --disable-slash-commands >/dev/null
-  ) || rc=$?
-  rm -rf "$run_dir"
-  if (( rc == 0 )); then
-    _FX_ANTIGRAVITY_READY=1
-    return 0
-  fi
-  return 1
+  return 0
 }
 
 _fx_provider_executable() {
@@ -666,8 +653,6 @@ _fx_ai_resolve() {   # called with the full original line
         if [[ "${_FX_ANTIGRAVITY_CONFINEMENT_FAILED:-}" == 1 ]]; then
           _fx_confinement_error antigravity
           return $?
-        elif _fx_provider_executable agy >/dev/null 2>&1; then
-          printf '\033[31m? agy authentication check failed; run agy to sign in and retry\033[0m\n' >&2
         else
           printf '\033[31m? agy not found on PATH\033[0m\n' >&2
         fi

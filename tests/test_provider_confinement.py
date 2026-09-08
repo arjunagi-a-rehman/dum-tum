@@ -286,7 +286,7 @@ class ProviderConfinementTests(unittest.TestCase):
                     self.assertFalse(self.marker.exists())
                     self.clear_logs()
 
-    def test_antigravity_readiness_is_confined_and_isolated(self):
+    def test_antigravity_readiness_checks_capabilities_without_prompt(self):
         for shell in SHELLS:
             with self.subTest(shell=shell):
                 env = os.environ.copy()
@@ -310,13 +310,9 @@ class ProviderConfinementTests(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8, check=False,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertNotEqual(
-                    Path((self.tmpdir / "agy.cwd").read_text().strip()).resolve(),
-                    self.tmpdir.resolve(),
-                )
-                args = (self.tmpdir / "agy.args").read_text()
-                for expected in ("<-p>", "</usage>", "<--sandbox>", "<plan>", "<--disable-slash-commands>"):
-                    self.assertIn(expected, args)
+                self.assertEqual(self.count("antigravity", "actual"), 0)
+                self.assertEqual(self.count("antigravity", "capability"), 1)
+                self.assertFalse((self.tmpdir / "agy.args").exists())
                 self.assertFalse(self.marker.exists())
                 self.clear_logs()
 
