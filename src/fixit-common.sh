@@ -70,6 +70,7 @@ _fx_can_autorun() {
   [[ -t 0 && -t 1 && -t 2 ]] || return 1
   alias "$cmd" >/dev/null 2>&1 && return 1
   typeset -f "$cmd" >/dev/null 2>&1 && return 1
+  _fx_trusted_command "$cmd" || return 1
   case "$cmd" in
     pwd)
       for arg in "$@"; do
@@ -99,12 +100,31 @@ _fx_looks_like_nl() {
 if [[ -n "${ZSH_VERSION:-}" ]]; then
   eval '_fx_all_commands() { print -rl -- ${(k)commands} ${(k)aliases} ${(k)functions} ${(k)builtins} }'
   eval '_fx_run_simple_line() { local -a words; words=(${=1}); (( ${#words[@]} )) && "${words[@]}" }'
+  eval '_fx_trusted_command() {
+    (( ${+builtins[$1]} )) && return 0
+    local resolved="${commands[$1]-}"
+    case "$resolved" in
+      /bin/*|/usr/bin/*|/sbin/*|/usr/sbin/*) return 0 ;;
+    esac
+    return 1
+  }'
 else
   _fx_all_commands() { { compgen -c; compgen -A function; compgen -a; compgen -b; } 2>/dev/null | sort -u; }
   _fx_run_simple_line() {
     local -a words
     read -r -a words <<< "$1"
     (( ${#words[@]} )) && "${words[@]}"
+  }
+  _fx_trusted_command() {
+    local kind resolved
+    kind="$(type -t -- "$1")" || return 1
+    [[ "$kind" == builtin ]] && return 0
+    [[ "$kind" == file ]] || return 1
+    resolved="$(type -P -- "$1")" || return 1
+    case "$resolved" in
+      /bin/*|/usr/bin/*|/sbin/*|/usr/sbin/*) return 0 ;;
+    esac
+    return 1
   }
 fi
 

@@ -2,6 +2,7 @@ import json
 import os
 import pty
 import select
+import shlex
 import shutil
 import signal
 import subprocess
@@ -61,7 +62,7 @@ class ShellSession:
         self.send(command + "\r")
         return self.read_until_idle(PROMPT)
 
-    def read_until_idle(self, needle, idle=0.15):
+    def read_until_idle(self, needle, idle=0.5):
         output = self.read_until(needle)
         if self.buffer:
             output += self.buffer.decode(errors="replace")
@@ -249,6 +250,24 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertIn(visible_file.name, output)
         self.assertNotIn("[Enter] run", output)
 
+        ls_executable = Path(self.tempdir.name) / "ls"
+        ls_marker = Path(self.tempdir.name) / "shadowed-ls-ran"
+        ls_executable.write_text(
+            "#!/bin/sh\n"
+            ": > \"$FX_LS_MARKER\"\n",
+            encoding="utf-8",
+        )
+        ls_executable.chmod(0o755)
+        self.shell.command(
+            f"FX_LS_MARKER='{ls_marker}'; export FX_LS_MARKER; hash -r 2>/dev/null || true"
+        )
+        self.shell.send("_fx_handle_not_found sl\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.assertFalse(ls_marker.exists(), output)
+        self.shell.send("n\r")
+        self.shell.read_until_idle(PROMPT)
+        self.assertFalse(ls_marker.exists(), output)
+
         self.shell.send(f"_fx_handle_not_found sl > '{redirected}'\r")
         output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
         self.shell.send("n\r")
@@ -302,6 +321,307 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.shell.send("n\r")
         output += self.shell.read_until_idle(PROMPT)
         self.assertNotIn("must-not-run", output)
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_ctrl_j_records_actual_failure(self):
+        shell = shutil.which("bash")
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ShellSession([shell, "--noprofile", "--norc", "-i"], tmp)
+            try:
+                session.command(f"source {shlex.quote(str(ROOT / 'src/fixit.bash'))}; FX_AI_ON_FAIL=0; _fx_fix_failed_line() {{ :; }}")
+                session.command("true")
+                session.send("bash -c 'exit 42'\n")
+                session.read_until_idle(PROMPT)
+                output = session.command("printf 'CAPTURE:%s\\n' \"$_FX_LASTFAIL\"")
+                self.assertIn("CAPTURE:bash -c 'exit 42' (exit 42)", output)
+            finally:
+                session.close()
+
+    def test_bash_unload_restores_original_keymap(self):
+        shell = shutil.which("bash")
+        version = subprocess.check_output([shell, "-c", "echo ${BASH_VERSINFO[0]}"], text=True)
+        if int(version.strip()) < 4:
+            self.skipTest("Readline bindings require Bash 4+")
+        with tempfile.TemporaryDirectory() as tmp:
+            session = ShellSession([shell, "--noprofile", "--norc", "-i"], tmp)
+            try:
+                session.command('before_macros="$(bind -m emacs-standard -s)"; before_functions="$(bind -m emacs-standard -p)"')
+                session.command(f"source {shlex.quote(str(ROOT / 'src/fixit.bash'))}")
+                output = session.command('set -o vi; dum_tum_unload; [[ "$(bind -m emacs-standard -s)" == "$before_macros" && "$(bind -m emacs-standard -p)" == "$before_functions" ]] && printf "KEYMAP_RESTORED\\n"')
+                self.assertIn("KEYMAP_RESTORED\r\n", output)
+            finally:
+                session.close()
+
+    def test_unload_restores_command_not_found_handlers(self):
+        for name, handler in (("bash", "command_not_found_handle"), ("zsh", "command_not_found_handler")):
+            shell = shutil.which(name)
+            if not shell:
+                continue
+            with tempfile.TemporaryDirectory() as tmp:
+                argv = [shell, "--noprofile", "--norc", "-i"] if name == "bash" else [shell, "-f", "-i"]
+                session = ShellSession(argv, tmp)
+                try:
+                    session.command(handler + "() { printf 'ORIGINAL_HANDLER\\n'; }")
+                    session.command(f"source {shlex.quote(str(ROOT / ('src/fixit.' + name)))}")
+                    session.command("dum_tum_unload")
+                    self.assertIn("ORIGINAL_HANDLER", session.command(("declare -f " if name == "bash" else "functions ") + handler))
+                finally:
+                    session.close()
+
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
+    def test_zsh_hooks_coexist_and_unload_restores_state(self):
+        zsh = shutil.which("zsh")
+        self.shell = ShellSession([zsh, "-f"], self.tempdir.name)
+        self.shell.command(
+            "FX_PREEXEC_COUNT=0; FX_PRECMD_COUNT=0; FX_ACCEPT_COUNT=0; "
+            "_fx_test_preexec() { (( FX_PREEXEC_COUNT += 1 )); }; "
+            "_fx_test_precmd() { (( FX_PRECMD_COUNT += 1 )); }; "
+            "_fx_test_accept() { (( FX_ACCEPT_COUNT += 1 )); zle .accept-line; }; "
+            "autoload -Uz add-zsh-hook; "
+            "add-zsh-hook preexec _fx_test_preexec; "
+            "add-zsh-hook precmd _fx_test_precmd; "
+            "zle -N accept-line _fx_test_accept"
+        )
+        adapter = ROOT / "src" / "fixit.zsh"
+        self.shell.command(f"source '{adapter}'; source '{adapter}'")
+        output = self.shell.command(
+            "fx_preexec_hooks=0; fx_precmd_hooks=0; "
+            "for fx_hook in $preexec_functions; do "
+            "[[ $fx_hook == _fx_preexec ]] && (( fx_preexec_hooks += 1 )); done; "
+            "for fx_hook in $precmd_functions; do "
+            "[[ $fx_hook == _fx_precmd ]] && (( fx_precmd_hooks += 1 )); done; "
+            "printf 'ZSH_HOOK_STATE=%s:%s:%s:%s:%s\\n' "
+            '"$FX_PREEXEC_COUNT" "$FX_PRECMD_COUNT" "$FX_ACCEPT_COUNT" '
+            '"$fx_preexec_hooks" "$fx_precmd_hooks"'
+        )
+        state = output.rsplit("ZSH_HOOK_STATE=", 1)[1].splitlines()[0].split(":")
+        self.assertGreater(int(state[0]), 0, output)
+        self.assertGreater(int(state[1]), 0, output)
+        self.assertGreater(int(state[2]), 0, output)
+        self.assertEqual(["1", "1"], state[3:], output)
+
+        self.shell.command("dum_tum_reload")
+        output = self.shell.command(
+            "printf 'ZSH_RELOAD=%s:%s\\n' "
+            '"${preexec_functions[(I)_fx_preexec]}" '
+            '"${precmd_functions[(I)_fx_precmd]}"; '
+            "zle -l -L accept-line"
+        )
+        state = output.rsplit("ZSH_RELOAD=", 1)[1].splitlines()[0].split(":")
+        self.assertNotEqual("0", state[0], output)
+        self.assertNotEqual("0", state[1], output)
+        self.assertIn("zle -N accept-line _fx_accept_line", output)
+
+        self.shell.command("dum_tum_unload")
+        output = self.shell.command(
+            "printf 'ZSH_RESTORE=%s:%s:%s:%s\\n' "
+            '"${preexec_functions[(I)_fx_preexec]}" '
+            '"${precmd_functions[(I)_fx_precmd]}" '
+            '"${preexec_functions[(I)_fx_test_preexec]}" '
+            '"${precmd_functions[(I)_fx_test_precmd]}"; '
+            "zle -l -L accept-line"
+        )
+        state = output.rsplit("ZSH_RESTORE=", 1)[1].splitlines()[0].split(":")
+        self.assertEqual(["0", "0"], state[:2], output)
+        self.assertNotEqual("0", state[2], output)
+        self.assertNotEqual("0", state[3], output)
+        self.assertIn("zle -N accept-line _fx_test_accept", output)
+
+        output = self.shell.command("printf 'ZSH_ACCEPT=%s\\n' \"$FX_ACCEPT_COUNT\"")
+        before = int(output.rsplit("ZSH_ACCEPT=", 1)[1].splitlines()[0])
+        self.shell.command("printf ZSH_PRIOR_WIDGET")
+        output = self.shell.command("printf 'ZSH_ACCEPT=%s\\n' \"$FX_ACCEPT_COUNT\"")
+        after = int(output.rsplit("ZSH_ACCEPT=", 1)[1].splitlines()[0])
+        self.assertGreater(after, before)
+
+        self.shell.command(f"source '{adapter}'")
+        self.shell.command(
+            "FX_LATER_ACCEPT_COUNT=0; "
+            "_fx_test_later_accept() { (( FX_LATER_ACCEPT_COUNT += 1 )); zle _fx_test_later_saved; }; "
+            "_fx_test_later_precmd() { :; }; "
+            "add-zsh-hook precmd _fx_test_later_precmd; "
+            "zle -A accept-line _fx_test_later_saved; "
+            "zle -N accept-line _fx_test_later_accept"
+        )
+        self.shell.command("dum_tum_unload")
+        output = self.shell.command(
+            "printf 'ZSH_LATER=%s:%s\\n' "
+            '"${precmd_functions[(I)_fx_test_later_precmd]}" "$FX_LATER_ACCEPT_COUNT"; '
+            "zle -l -L accept-line; zle -l -L _fx_test_later_saved"
+        )
+        state = output.rsplit("ZSH_LATER=", 1)[1].splitlines()[0].split(":")
+        self.assertNotEqual("0", state[0], output)
+        self.assertGreater(int(state[1]), 0, output)
+        self.assertIn("zle -N accept-line _fx_test_later_accept", output)
+        self.assertIn("zle -N _fx_test_later_saved _fx_test_accept", output)
+
+        self.shell.command("dum_tum_reload; dum_tum_reload")
+        output = self.shell.command("printf ZSH_DELEGATING_WRAPPER")
+        self.assertIn("ZSH_DELEGATING_WRAPPER", output)
+        output = self.shell.command(
+            "printf 'ZSH_DELEGATE_COUNTS=%s:%s\\n' "
+            '"$FX_LATER_ACCEPT_COUNT" "$FX_ACCEPT_COUNT"'
+        )
+        state = output.rsplit("ZSH_DELEGATE_COUNTS=", 1)[1].splitlines()[0].split(":")
+        self.assertGreater(int(state[0]), 0, output)
+        self.assertGreater(int(state[1]), 0, output)
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_hooks_coexist_and_unload_restores_state(self):
+        bash = shutil.which("bash")
+        version = subprocess.check_output([bash, "-c", "printf %s \"${BASH_VERSINFO[0]}\""]).decode()
+        if int(version) < 4:
+            self.skipTest("Bash 4+ is required for Readline binding coexistence")
+        self.shell = ShellSession([bash, "--noprofile", "--norc", "-i"], self.tempdir.name)
+        self.shell.command(
+            "FX_DEBUG_COUNT=0; FX_PROMPT_COUNT=0; FX_PROMPT_STATUS=0; FX_ENTER_COUNT=0; "
+            "_fx_test_prompt() { FX_PROMPT_STATUS=$?; (( FX_PROMPT_COUNT += 1 )); }; "
+            "_fx_test_enter() { (( FX_ENTER_COUNT += 1 )); }; "
+            "trap ': \"$((FX_DEBUG_COUNT += 1))\"' DEBUG; "
+            "FX_EXPECT_DEBUG=\"$(trap -p DEBUG)\"; "
+            "PROMPT_COMMAND=_fx_test_prompt; "
+            "bind -x '\"\\C-xft\": _fx_test_enter'; "
+            "bind '\"\\C-xfx\": \"prior-hidden\"'; "
+            "bind '\"\\C-m\": \"\\C-xft\\C-j\"'"
+        )
+        adapter = ROOT / "src" / "fixit.bash"
+        self.shell.command(f"source '{adapter}'; source '{adapter}'")
+        output = self.shell.command(
+            "[[ \"$(trap -p DEBUG)\" == \"$FX_EXPECT_DEBUG\" ]]; fx_debug_live=$?; "
+            "printf 'BASH_HOOK_STATE=%s:%s:%s:%s\\n' "
+            '"$FX_DEBUG_COUNT" "$FX_PROMPT_COUNT" "$FX_ENTER_COUNT" "$PROMPT_COMMAND"; '
+            "printf 'BASH_DEBUG_LIVE=%s\\n' \"$fx_debug_live\"; "
+            "printf 'BASH_CAPTURE=%s:%s:%s:%s\\n' "
+            '"${_FX_BASH_BIND_TYPES[0]}" "${_FX_BASH_BIND_VALUES[0]}" '
+            '"${_FX_BASH_BIND_TYPES[1]}" "${_FX_BASH_BIND_VALUES[1]}"'
+        )
+        state = output.rsplit("BASH_HOOK_STATE=", 1)[1].splitlines()[0].split(":", 3)
+        self.assertGreater(int(state[0]), 0, output)
+        self.assertGreater(int(state[1]), 0, output)
+        self.assertGreater(int(state[2]), 0, output)
+        self.assertEqual("_fx_prompt_hook;_fx_test_prompt", state[3], output)
+        self.assertIn("BASH_DEBUG_LIVE=0", output)
+        self.assertIn("BASH_CAPTURE=macro", output)
+
+        self.shell.command("false")
+        output = self.shell.command("printf 'BASH_PRIOR_STATUS=%s\\n' \"$FX_PROMPT_STATUS\"")
+        self.assertIn("BASH_PRIOR_STATUS=1", output)
+
+        self.shell.command("dum_tum_reload")
+        output = self.shell.command("printf 'BASH_RELOAD=%s\\n' \"$PROMPT_COMMAND\"")
+        self.assertIn("BASH_RELOAD=_fx_prompt_hook;_fx_test_prompt", output)
+
+        self.shell.command("dum_tum_unload")
+        restore_command = (
+            "[[ \"$(trap -p DEBUG)\" == \"$FX_EXPECT_DEBUG\" ]]; fx_debug_restored=$?; "
+            "[[ $PROMPT_COMMAND == _fx_test_prompt ]]; fx_prompt_restored=$?; "
+            "printf 'BASH_RESTORE=%s:%s:%s\\n' "
+            '"$fx_debug_restored" "$fx_prompt_restored" "$FX_ENTER_COUNT"; '
+            "bind -s"
+        )
+        self.shell.send(restore_command + "\n")
+        output = self.shell.read_until_idle(PROMPT)
+        state = output.rsplit("BASH_RESTORE=", 1)[1].splitlines()[0].split(":")
+        self.assertEqual(["0", "0"], state[:2], output)
+        self.assertGreater(int(state[2]), 0, output)
+        self.assertIn(r'"\C-xfx": "prior-hidden"', output)
+        self.assertIn(r'"\C-m": "\C-xft\C-j"', output)
+
+        self.shell.command(f"source '{adapter}'")
+        self.shell.command(
+            "_fx_test_later_prompt() { :; }; "
+            'PROMPT_COMMAND="$PROMPT_COMMAND;_fx_test_later_prompt"; '
+            "bind '\"\\C-m\": \"\\C-j\"'"
+        )
+        self.shell.command("dum_tum_unload")
+        output = self.shell.command(
+            "printf 'BASH_LATER=%s\\n' \"$PROMPT_COMMAND\"; bind -s"
+        )
+        self.assertIn("BASH_LATER=_fx_test_prompt;_fx_test_later_prompt", output)
+        self.assertIn(r'"\C-m": "\C-j"', output)
+
+        self.shell.command(f"source '{adapter}'")
+        self.shell.command(
+            "_fx_test_prepend_prompt() { :; }; "
+            'PROMPT_COMMAND="_fx_test_prepend_prompt;$PROMPT_COMMAND"'
+        )
+        self.shell.command("dum_tum_unload")
+        output = self.shell.command("printf 'BASH_PREPEND_UNLOAD=%s\\n' \"$PROMPT_COMMAND\"")
+        self.assertIn(
+            "BASH_PREPEND_UNLOAD=_fx_test_prepend_prompt;_fx_test_prompt;_fx_test_later_prompt",
+            output,
+        )
+        self.shell.command("dum_tum_reload; dum_tum_reload")
+        output = self.shell.command("printf 'BASH_PREPEND_RELOAD=%s\\n' \"$PROMPT_COMMAND\"")
+        state = output.rsplit("BASH_PREPEND_RELOAD=", 1)[1].splitlines()[0]
+        self.assertEqual(
+            "_fx_prompt_hook;_fx_test_prepend_prompt;_fx_test_prompt;_fx_test_later_prompt",
+            state,
+            output,
+        )
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_prompt_command_array_is_preserved(self):
+        bash = shutil.which("bash")
+        version = subprocess.check_output([bash, "-c", "printf %s \"${BASH_VERSINFO[0]}\""]).decode()
+        if int(version) < 5:
+            self.skipTest("Bash 5+ is required for PROMPT_COMMAND arrays")
+        self.shell = ShellSession([bash, "--noprofile", "--norc", "-i"], self.tempdir.name)
+        self.shell.command(
+            "FX_PROMPT_ONE=0; FX_PROMPT_TWO=0; "
+            "_fx_test_prompt_one() { (( FX_PROMPT_ONE += 1 )); }; "
+            "_fx_test_prompt_two() { (( FX_PROMPT_TWO += 1 )); }; "
+            "PROMPT_COMMAND=(_fx_test_prompt_one _fx_test_prompt_two)"
+        )
+        adapter = ROOT / "src" / "fixit.bash"
+        self.shell.command(f"source '{adapter}'; source '{adapter}'")
+        output = self.shell.command(
+            "printf 'BASH_ARRAY=%s:%s:%s:%s:%s\\n' "
+            '"${#PROMPT_COMMAND[@]}" "${PROMPT_COMMAND[0]}" '
+            '"${PROMPT_COMMAND[1]}" "${PROMPT_COMMAND[2]}" '
+            '"$FX_PROMPT_ONE,$FX_PROMPT_TWO"'
+        )
+        state = output.rsplit("BASH_ARRAY=", 1)[1].splitlines()[0].split(":")
+        self.assertEqual(
+            ["3", "_fx_prompt_hook", "_fx_test_prompt_one", "_fx_test_prompt_two"],
+            state[:4],
+            output,
+        )
+        counts = state[4].split(",")
+        self.assertGreater(int(counts[0]), 0, output)
+        self.assertGreater(int(counts[1]), 0, output)
+
+        self.shell.command(
+            "_fx_test_prompt_later() { :; }; PROMPT_COMMAND+=(_fx_test_prompt_later)"
+        )
+        self.shell.command("dum_tum_unload")
+        output = self.shell.command(
+            "printf 'BASH_ARRAY_RESTORE=%s:%s:%s:%s\\n' "
+            '"${#PROMPT_COMMAND[@]}" "${PROMPT_COMMAND[0]}" "${PROMPT_COMMAND[1]}" '
+            '"${PROMPT_COMMAND[2]}"'
+        )
+        state = output.rsplit("BASH_ARRAY_RESTORE=", 1)[1].splitlines()[0].split(":")
+        self.assertEqual(
+            ["3", "_fx_test_prompt_one", "_fx_test_prompt_two", "_fx_test_prompt_later"],
+            state,
+            output,
+        )
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_nounset_loads_with_unset_prompt_command(self):
+        bash = shutil.which("bash")
+        self.shell = ShellSession([bash, "--noprofile", "--norc", "-u", "-i"], self.tempdir.name)
+        self.shell.command("_FX_LAST=''; _FX_LASTFAIL=''; _FX_FIXED=0; unset PROMPT_COMMAND")
+        adapter = ROOT / "src" / "fixit.bash"
+        output = self.shell.command(
+            f"source '{adapter}'; "
+            "printf 'BASH_NOUNSET=%s:%s\\n' \"$_FX_BASH_LOADED\" \"$PROMPT_COMMAND\""
+        )
+        self.assertIn("BASH_NOUNSET=1:_fx_prompt_hook", output)
+        output = self.shell.command(
+            "dum_tum_unload; printf 'BASH_NOUNSET_UNLOAD=%s\\n' \"${PROMPT_COMMAND+x}\""
+        )
+        self.assertIn("BASH_NOUNSET_UNLOAD=", output)
 
     @unittest.skipUnless(shutil.which("zsh"), "zsh is not installed")
     def test_zsh_confirmation_flow(self):
