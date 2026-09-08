@@ -54,7 +54,7 @@ Options:
   --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
-  --skip-ai-test    Skip the post-setup AI smoke test
+  --skip-ai-test    Skip provider execution, auth checks, and network smoke tests
   --uninstall       Remove fixit from ~/.zshrc and ~/.bashrc
   --help, -h        Show this help
 
@@ -272,7 +272,7 @@ install_script() {
   ok "Installed → $INSTALL_DIR"
 }
 
-detect_ai_clis() {
+discover_ai_clis() {
   HAVE_OPENCODE=0
   HAVE_CLAUDE=0
   HAVE_CODEX=0
@@ -280,6 +280,7 @@ detect_ai_clis() {
   have opencode && HAVE_OPENCODE=1
   have claude && HAVE_CLAUDE=1
   have codex && HAVE_CODEX=1
+  have agy && HAVE_ANTIGRAVITY=1
   if [[ "$HAVE_OPENCODE" -eq 1 ]]; then
     ok "Detected OpenCode CLI ($(command -v opencode))"
   fi
@@ -289,15 +290,26 @@ detect_ai_clis() {
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     ok "Detected Codex CLI ($(command -v codex))"
   fi
-  if have agy && FX_PROVIDER=antigravity FX_AI_READY_TIMEOUT=10 bash -c '
-    source "$1"
-    _fx_ai_ready
-  ' bash "$INSTALL_DIR/fixit-common.sh"; then
-    HAVE_ANTIGRAVITY=1
+  if [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
     ok "Detected Antigravity CLI ($(command -v agy))"
-  elif have agy; then
-    warn "Antigravity CLI found but not authenticated; run agy to sign in"
   fi
+}
+
+validate_selected_provider() {
+  case "$PROVIDER" in
+    opencode)
+      [[ "$HAVE_OPENCODE" -eq 1 ]] || { err "OpenCode CLI not found on PATH"; return 1; }
+      ;;
+    claude)
+      [[ "$HAVE_CLAUDE" -eq 1 ]] || { err "Claude Code CLI not found on PATH"; return 1; }
+      ;;
+    codex)
+      [[ "$HAVE_CODEX" -eq 1 ]] || { err "Codex CLI not found on PATH"; return 1; }
+      ;;
+    antigravity)
+      [[ "$HAVE_ANTIGRAVITY" -eq 1 ]] || { err "Antigravity CLI not found on PATH"; return 1; }
+      ;;
+  esac
 }
 
 normalize_provider() {
@@ -600,9 +612,10 @@ select_model() {
       )
       ;;
     opencode)
-      # Full live list from the CLI (all providers configured in opencode)
-      local listed
-      listed="$(opencode models 2>/dev/null || true)"
+      local listed=""
+      if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+        listed="$(opencode models 2>/dev/null || true)"
+      fi
       if [[ -n "$listed" ]]; then
         while IFS= read -r line; do
           line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -652,9 +665,9 @@ select_model() {
       return 0
       ;;
     codex)
-      # Live catalog from the CLI (visibility=list only)
-      local listed
-      listed="$(codex debug models 2>/dev/null | python3 -c '
+      local listed=""
+      if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+        listed="$(codex debug models 2>/dev/null | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -665,6 +678,7 @@ try:
 except Exception:
     pass
 ' 2>/dev/null || true)"
+      fi
       if [[ -n "$listed" ]]; then
         while IFS= read -r slug; do
           [[ -n "$slug" ]] && models+=("$slug")
@@ -702,8 +716,10 @@ except Exception:
       return 0
       ;;
     antigravity)
-      local listed
-      listed="$(agy models 2>/dev/null || true)"
+      local listed=""
+      if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+        listed="$(agy models 2>/dev/null || true)"
+      fi
       if [[ -n "$listed" ]]; then
         while IFS= read -r line; do
           line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -774,10 +790,17 @@ select_variant() {
     return 0
   fi
 
+  if ! is_interactive; then
+    [[ -n "$VARIANT" ]] && ok "Reasoning: $VARIANT" || ok "Reasoning: (model default)"
+    return 0
+  fi
+
   local -a levels=() def_level=""
   if [[ "$PROVIDER" == "codex" ]]; then
     local info_line
-    info_line="$(codex debug models 2>/dev/null | python3 -c '
+    info_line=""
+    if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+      info_line="$(codex debug models 2>/dev/null | python3 -c '
 import json, sys
 want = sys.argv[1] if len(sys.argv) > 1 else ""
 try:
@@ -796,6 +819,7 @@ if pick:
     lv = [x["effort"] for x in pick.get("supported_reasoning_levels", [])]
     print((pick.get("default_reasoning_level") or "") + "|" + ",".join(lv))
 ' "${MODEL:-}" 2>/dev/null || true)"
+    fi
     def_level="${info_line%%|*}"
     if [[ "$info_line" == *"|"* ]]; then
       local csv="${info_line#*|}" lvl
@@ -815,11 +839,6 @@ if pick:
     levels=(low medium high)
   else
     levels=(low medium high)
-  fi
-
-  if ! is_interactive; then
-    [[ -n "$VARIANT" ]] && ok "Reasoning: $VARIANT" || ok "Reasoning: (model default)"
-    return 0
   fi
 
   local hint="$VARIANT"
@@ -853,10 +872,6 @@ if pick:
 
 # ---------- smoke test ----------
 test_ai() {
-  if [[ "$PROVIDER" == "antigravity" && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
-    err "Antigravity CLI is unavailable or not authenticated; run agy to sign in"
-    return 1
-  fi
   [[ "$SKIP_AI_TEST" -eq 1 ]] && return 0
   [[ "$PROVIDER" == "none" ]] && return 0
 
@@ -864,18 +879,6 @@ test_ai() {
   key_var="$(key_var_for_provider "$PROVIDER")"
   if [[ -n "$key_var" && ( -z "$API_KEY" || "$API_KEY_PROVIDER" != "$PROVIDER" ) ]]; then
     warn "Skipping AI test (no API key)"
-    return 0
-  fi
-  if [[ "$PROVIDER" == "opencode" && "$HAVE_OPENCODE" -eq 0 ]]; then
-    warn "Skipping AI test (opencode missing)"
-    return 0
-  fi
-  if [[ "$PROVIDER" == "claude" && "$HAVE_CLAUDE" -eq 0 ]]; then
-    warn "Skipping AI test (claude missing)"
-    return 0
-  fi
-  if [[ "$PROVIDER" == "codex" && "$HAVE_CODEX" -eq 0 ]]; then
-    warn "Skipping AI test (codex missing)"
     return 0
   fi
   info "Testing AI backend ($PROVIDER)…"
@@ -949,6 +952,7 @@ test_ai() {
       PROVIDER=""
       MODEL=""
       select_provider
+      validate_selected_provider
       maybe_ask_key
       select_model
       select_variant
@@ -1215,8 +1219,9 @@ main() {
   select_shells
   install_deps
   install_script
-  detect_ai_clis
+  discover_ai_clis
   select_provider
+  validate_selected_provider
   maybe_ask_key
   select_model
   select_variant

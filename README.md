@@ -107,6 +107,8 @@ exec zsh          # or: exec bash
 
 For a key-based non-interactive install, provide only the environment variable matching the selected provider: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` (`GOOGLE_API_KEY` is also accepted for Gemini). The removed `--key` option is rejected because command-line values are exposed in shell history and process arguments. To enter a key without echoing it, omit `--yes` and run with the provider only, such as `./install.sh --provider openai`; the installer uses a hidden terminal prompt.
 
+`--skip-ai-test` prevents all provider CLI execution, live model discovery, authentication checks, and network smoke tests. The installer still verifies that a selected local CLI exists on `PATH`; a key-based provider without its matching key is disabled. Choosing `--provider none` performs no AI-provider or model-network activity.
+
 Requires `python3`, `curl`, and either zsh or Bash 4+.
 
 | Shell | Support |

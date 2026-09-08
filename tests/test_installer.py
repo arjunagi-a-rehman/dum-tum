@@ -65,6 +65,45 @@ class InstallerKeyHandlingTest(unittest.TestCase):
             check=False,
         )
 
+    def provider_stubs(self):
+        stub_dir = self.base / "provider-stubs"
+        stub_dir.mkdir(exist_ok=True)
+        script = (
+            "#!/bin/sh\n"
+            "name=${0##*/}\n"
+            "counter=\"$DUM_TUM_COUNTER_DIR/$name\"\n"
+            "count=0\n"
+            "[ ! -f \"$counter\" ] || IFS= read -r count < \"$counter\"\n"
+            "printf '%s\\n' \"$((count + 1))\" > \"$counter\"\n"
+            "case \"$name\" in\n"
+            "  opencode) printf '%s\\n' '{\"type\":\"text\",\"part\":{\"type\":\"text\",\"text\":\"ls -la\"}}' ;;\n"
+            "  claude) printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"ls -la\"}' ;;\n"
+            "  codex)\n"
+            "    while [ \"$#\" -gt 0 ]; do\n"
+            "      if [ \"$1\" = \"-o\" ]; then shift; printf 'ls -la\\n' > \"$1\"; exit 0; fi\n"
+            "      shift\n"
+            "    done\n"
+            "    exit 1\n"
+            "    ;;\n"
+            "  agy) printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ls -la\\n\"}}' ;;\n"
+            "esac\n"
+        )
+        for name in ("opencode", "claude", "codex", "agy"):
+            executable = stub_dir / name
+            executable.write_text(script)
+            executable.chmod(0o755)
+        return stub_dir
+
+    def invocation_counts(self):
+        return {
+            name: int((self.base / name).read_text()) if (self.base / name).exists() else 0
+            for name in ("opencode", "claude", "codex", "agy")
+        }
+
+    def clear_invocation_counts(self):
+        for name in ("opencode", "claude", "codex", "agy"):
+            (self.base / name).unlink(missing_ok=True)
+
     def test_explicit_provider_uses_only_its_key_in_multi_key_environment(self):
         result = self.run_installer(
             "--provider",
@@ -270,6 +309,120 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
         self.assertNotIn(marker, output.decode(errors="replace"))
         config = (self.home / ".zshrc").read_text()
         self.assertIn(f'export OPENAI_API_KEY="{marker}"', config)
+
+    def test_skip_ai_test_never_executes_provider_cli_for_explicit_providers(self):
+        stub_dir = self.provider_stubs()
+        env = self.env(
+            PATH=f"{stub_dir}:/usr/bin:/bin",
+            DUM_TUM_COUNTER_DIR=str(self.base),
+            OPENROUTER_API_KEY="router-value",
+            OPENAI_API_KEY="openai-value",
+            ANTHROPIC_API_KEY="anthropic-value",
+            GEMINI_API_KEY="gemini-value",
+        )
+        providers = (
+            "none",
+            "openrouter",
+            "openai",
+            "anthropic",
+            "gemini",
+            "opencode",
+            "claude",
+            "codex",
+            "antigravity",
+        )
+        for provider in providers:
+            with self.subTest(provider=provider):
+                self.clear_invocation_counts()
+                result = self.run_installer("--provider", provider, env=env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(
+                    self.invocation_counts(),
+                    {"opencode": 0, "claude": 0, "codex": 0, "agy": 0},
+                )
+
+    def test_skip_ai_test_still_requires_selected_cli_on_path(self):
+        result = self.run_installer("--provider", "opencode", env=self.env())
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("OpenCode CLI not found on PATH", result.stderr)
+        self.assertFalse((self.home / ".zshrc").exists())
+
+    def test_local_only_without_skip_executes_no_provider_or_network_client(self):
+        stub_dir = self.provider_stubs()
+        curl_marker = self.base / "curl-called"
+        fake_curl = stub_dir / "curl"
+        fake_curl.write_text("#!/bin/sh\ntouch \"$DUM_TUM_CURL_MARKER\"\nexit 1\n")
+        fake_curl.chmod(0o755)
+        env = self.env(
+            PATH=f"{stub_dir}:/usr/bin:/bin",
+            DUM_TUM_COUNTER_DIR=str(self.base),
+            DUM_TUM_CURL_MARKER=str(curl_marker),
+        )
+        result = subprocess.run(
+            [
+                "/bin/bash",
+                str(INSTALLER),
+                "--yes",
+                "--skip-deps",
+                "--provider",
+                "none",
+                "--shell",
+                "zsh",
+            ],
+            cwd=ROOT,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            self.invocation_counts(),
+            {"opencode": 0, "claude": 0, "codex": 0, "agy": 0},
+        )
+        self.assertFalse(curl_marker.exists())
+
+    def test_smoke_test_executes_only_the_selected_provider_cli(self):
+        stub_dir = self.provider_stubs()
+        env = self.env(
+            PATH=f"{stub_dir}:/usr/bin:/bin",
+            DUM_TUM_COUNTER_DIR=str(self.base),
+            SHELL="/bin/bash",
+        )
+        provider_to_command = {
+            "opencode": "opencode",
+            "claude": "claude",
+            "codex": "codex",
+            "antigravity": "agy",
+        }
+        for provider, selected_command in provider_to_command.items():
+            with self.subTest(provider=provider):
+                self.clear_invocation_counts()
+                result = subprocess.run(
+                    [
+                        "/bin/bash",
+                        str(INSTALLER),
+                        "--yes",
+                        "--skip-deps",
+                        "--provider",
+                        provider,
+                        "--model",
+                        "test-model",
+                        "--shell",
+                        "bash",
+                    ],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    timeout=20,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                expected = {"opencode": 0, "claude": 0, "codex": 0, "agy": 0}
+                expected[selected_command] = 1
+                self.assertEqual(self.invocation_counts(), expected)
 
 
 if __name__ == "__main__":
