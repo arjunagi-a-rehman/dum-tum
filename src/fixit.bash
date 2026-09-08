@@ -7,6 +7,9 @@ _FX_BASH_ADAPTER="$_fx_dir/fixit.bash"
 [[ -f "$_fx_dir/fixit-common.sh" ]] && source "$_fx_dir/fixit-common.sh"
 unset _fx_dir
 
+_FX_LAST=${_FX_LAST-}
+_FX_LASTFAIL=${_FX_LASTFAIL-}
+_FX_FIXED=${_FX_FIXED-0}
 if [[ "${_FX_BASH_CNF_INSTALLED:-0}" != 1 ]]; then
   _FX_BASH_PREV_CNF="$(declare -f command_not_found_handle)"
   _FX_BASH_CNF_INSTALLED=1
