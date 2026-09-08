@@ -107,13 +107,12 @@ else
 fi
 
 # ---------- _fx_has_secrets ----------
-check_rc "_fx_has_secrets --password" 0 _fx_has_secrets 'curl --password=hunter2 x'
-check_rc "_fx_has_secrets --token space" 0 _fx_has_secrets 'git clone --token abc123'
-check_rc "_fx_has_secrets Bearer" 0 _fx_has_secrets 'curl -H "Authorization: Bearer abc.def.ghi"'
-check_rc "_fx_has_secrets sk- key" 0 _fx_has_secrets 'export OPENAI_API_KEY=sk-abcdefghijklmnop'
-check_rc "_fx_has_secrets KEY= env" 0 _fx_has_secrets 'OPENROUTER_API_KEY=zzz999'
-check_rc "_fx_has_secrets plain command" 1 _fx_has_secrets 'git psuh origin main'
-check_rc "_fx_has_secrets bare flag no value" 1 _fx_has_secrets 'curl --password'
+detect_secret() { printf '%s' "$1" | _fx_has_secrets; }
+check_rc "_fx_has_secrets --password" 0 detect_secret 'curl --password=hunter2 x'
+check_rc "_fx_has_secrets quoted API key" 0 detect_secret 'OPENAI_API_KEY = "alpha beta"'
+check_rc "_fx_has_secrets credential URL" 0 detect_secret 'postgres://user:secret@localhost/db'
+check_rc "_fx_has_secrets plain command" 1 detect_secret 'git psuh origin main'
+check_rc "_fx_has_secrets bare flag no value" 1 detect_secret 'curl --password'
 
 # ---------- _fx_redact_secrets ----------
 out=$(printf 'curl --password=hunter2 x\n' | _fx_redact_secrets)
@@ -139,6 +138,28 @@ check_eq "redact SECRET_TOKEN env" 'MY_SECRET_TOKEN=[REDACTED]' "$out"
 
 out=$(printf 'nothing secret here\n' | _fx_redact_secrets)
 check_eq "redact leaves plain text" 'nothing secret here' "$out"
+
+out=$(printf 'OPENAI_API_KEY = "alpha beta"\n' | _fx_redact_secrets)
+check_eq "redact quoted spaced assignment" 'OPENAI_API_KEY = "[REDACTED]"' "$out"
+
+out=$(_fx_curl_config_header $'Authorization: Bearer slash\\quote"tail')
+check_eq "curl config header escapes backslash and quote" \
+  'header = "Authorization: Bearer slash\\quote\"tail"' "$out"
+check_rc "curl config header rejects LF" 1 _fx_curl_config_header $'Authorization: Bearer safe\nurl = "https://attacker.invalid"'
+check_rc "curl config header rejects CR" 1 _fx_curl_config_header $'Authorization: Bearer safe\rurl = "https://attacker.invalid"'
+
+curl() {
+  printf 'called\n' >> "$TMPD/curl-called"
+}
+rm -f "$TMPD/curl-called"
+check_rc "AI HTTP rejects injected header" 2 _fx_ai_http '{}' 'https://provider.invalid' \
+  $'Authorization: Bearer safe\nurl = "https://attacker.invalid"'
+if [[ ! -e "$TMPD/curl-called" ]]; then
+  ok "AI HTTP does not invoke curl for injected header"
+else
+  bad "AI HTTP invoked curl for injected header"
+fi
+unset -f curl
 
 # ---------- _fx_strip_ctrl ----------
 out=$(printf '\033[31mred\033[0m plain\n' | _fx_strip_ctrl)
@@ -280,6 +301,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   printf '#!/bin/sh\n[ "$1" = "-p" ] && [ "$2" = "/usage" ]\n' > bin/agy
   chmod +x bin/agy
@@ -290,6 +312,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   printf '#!/bin/sh\nexit 1\n' > bin/agy
   chmod +x bin/agy
@@ -300,6 +323,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   rm -f "$TMPD/agy-ready-marker"
   printf '%s\n' '#!/bin/sh' \
@@ -319,6 +343,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p bin
   printf '#!/bin/sh\nexit 1\n' > bin/agy
   chmod +x bin/agy
@@ -332,6 +357,7 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   mkdir -p emptybin
   PATH="$TMPD/emptybin:/usr/bin:/bin"
   unset _FX_ANTIGRAVITY_READY
@@ -341,13 +367,17 @@ if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 out=$(
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
   printf '%s\n' '#!/usr/bin/env bash' \
     '[[ "$PWD" != "$FX_TEST_ORIGINAL_CWD" ]] || exit 1' \
     '[[ "$1" == "--input-format" && "$2" == "stream-json" ]] || exit 1' \
     '[[ "$3" == "--output-format" && "$4" == "stream-json" ]] || exit 1' \
-    '[[ "$5" == "--model" && "$6" == "test-model" ]] || exit 1' \
-    '[[ "$7" == "--effort" && "$8" == "high" ]] || exit 1' \
-    '[[ "$#" == 8 ]] || exit 1' \
+    '[[ "$5" == "--sandbox" ]] || exit 1' \
+    '[[ "$6" == "--mode" && "$7" == "plan" ]] || exit 1' \
+    '[[ "$8" == "--disable-slash-commands" ]] || exit 1' \
+    '[[ "$9" == "--model" && "${10}" == "test-model" ]] || exit 1' \
+    '[[ "${11}" == "--effort" && "${12}" == "high" ]] || exit 1' \
+    '[[ "$#" == 12 ]] || exit 1' \
     'IFS= read -r payload' \
     '[[ "$payload" == *"Task/failed input: list files"* ]] || exit 1' \
     "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ls -la\\n\"}}'" > bin/agy
@@ -363,16 +393,25 @@ if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 check_eq "_fx_ai_antigravity stdin and isolation" 'ls -la' "$out"
 
 mkdir -p "$TMPD/install-home"
-check_rc "installer rejects unauthenticated antigravity" 1 env \
+rm -f "$TMPD/agy-installer-marker"
+printf '#!/bin/sh\ntouch "$FX_TEST_AGY_INSTALLER_MARKER"\nexit 1\n' > bin/agy
+chmod +x bin/agy
+check_rc "installer skip-ai-test does not authenticate antigravity" 0 env \
   HOME="$TMPD/install-home" \
   FIXIT_HOME="$TMPD/install-target" \
+  FX_TEST_AGY_INSTALLER_MARKER="$TMPD/agy-installer-marker" \
   PATH="$TMPD/bin:$PATH" \
   SHELL=/bin/zsh \
   "$ROOT/install.sh" --yes --skip-deps --skip-ai-test --provider antigravity --shell zsh
-if [[ ! -e "$TMPD/install-home/.zshrc" ]]; then
-  ok "installer does not write config for unauthenticated antigravity"
+if [[ ! -e "$TMPD/agy-installer-marker" ]]; then
+  ok "installer skip-ai-test leaves antigravity uninvoked"
 else
-  bad "installer does not write config for unauthenticated antigravity"
+  bad "installer skip-ai-test leaves antigravity uninvoked"
+fi
+if grep -q "export FX_PROVIDER='antigravity'" "$TMPD/install-home/.zshrc" 2>/dev/null; then
+  ok "installer skip-ai-test writes antigravity config"
+else
+  bad "installer skip-ai-test writes antigravity config"
 fi
 (
   FX_PROVIDER=off

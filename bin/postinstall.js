@@ -8,9 +8,12 @@ To finish installation, run:
 
 Other options:
 
-  npx dum-tum --key sk-or-v1-...                              set your OpenRouter key
+  npx dum-tum --provider openrouter                           enter a key in the hidden prompt
   npx dum-tum --provider opencode --model anthropic/claude-sonnet-4
   npx dum-tum --uninstall
+
+For non-interactive installs, set the matching provider environment variable first
+(OPENROUTER_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY, or GEMINI_API_KEY).
 
 Documentation: https://github.com/arjunagi-a-rehman/dum-tum#readme
 `);

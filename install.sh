@@ -4,7 +4,6 @@
 #   curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 #   npx github:arjunagi-a-rehman/dum-tum
 #   ./install.sh
-#   ./install.sh --key sk-or-v1-...
 #   ./install.sh --provider opencode --model anthropic/claude-sonnet-4
 #   ./install.sh --uninstall
 set -euo pipefail
@@ -43,19 +42,17 @@ case "$INSTALLER_SOURCE" in
     ;;
 esac
 
-# Values from CLI flags only (env is a non-interactive fallback — does not skip menus)
 API_KEY=""
+API_KEY_PROVIDER=""
 PROVIDER=""
 MODEL=""
 VARIANT=""
 PROVIDER_FROM_CLI=0
 MODEL_FROM_CLI=0
-KEY_FROM_CLI=0
 VARIANT_FROM_CLI=0
 PROVIDER_FROM_ENV=0
 MODEL_FROM_ENV=0
 VARIANT_FROM_ENV=0
-KEY_FROM_ENV=0
 ASSUME_YES=0
 SKIP_DEPS=0
 SKIP_AI_TEST=0
@@ -107,19 +104,18 @@ Options:
   --provider NAME   openrouter | openai | anthropic | gemini | opencode | claude | codex | antigravity | none
   --model ID        Model id for the chosen provider
   --variant LEVEL   Reasoning effort (CLI providers: low|medium|high|...)
-  --key KEY         API key for key-based providers (openrouter/openai/anthropic/gemini)
   --shell NAME      zsh | bash | both (default: your login shell, else both)
   --yes, -y         Non-interactive where possible
   --skip-deps       Do not try to install zsh/python3/curl
-  --skip-ai-test    Skip the post-setup AI smoke test
+  --skip-ai-test    Skip provider execution, auth checks, and network smoke tests
   --uninstall       Remove dum-tum from ~/.zshrc and ~/.bashrc
   --help, -h        Show this help
 
 Env (used when --yes / non-interactive; interactive always prompts):
-  OPENROUTER_API_KEY   Same as --key (provider=openrouter)
-  OPENAI_API_KEY       Same as --key (provider=openai)
-  ANTHROPIC_API_KEY    Same as --key (provider=anthropic)
-  GEMINI_API_KEY       Same as --key (provider=gemini; GOOGLE_API_KEY also works)
+  OPENROUTER_API_KEY   Used only when provider=openrouter
+  OPENAI_API_KEY       Used only when provider=openai
+  ANTHROPIC_API_KEY    Used only when provider=anthropic
+  GEMINI_API_KEY       Used only when provider=gemini; GOOGLE_API_KEY is a fallback
   FX_PROVIDER          Same as --provider
   FX_MODEL             Same as --model
   FX_VARIANT           Same as --variant
@@ -130,8 +126,11 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --key) API_KEY="${2:-}"; KEY_FROM_CLI=1; shift 2 ;;
-    --key=*) API_KEY="${1#--key=}"; KEY_FROM_CLI=1; shift ;;
+    --key|--key=*)
+      echo "The --key option is not supported because command-line secrets are process-visible." >&2
+      echo "Use the matching provider environment variable or the installer's hidden prompt." >&2
+      exit 1
+      ;;
     --provider) PROVIDER="${2:-}"; PROVIDER_FROM_CLI=1; shift 2 ;;
     --provider=*) PROVIDER="${1#--provider=}"; PROVIDER_FROM_CLI=1; shift ;;
     --model) MODEL="${2:-}"; MODEL_FROM_CLI=1; shift 2 ;;
@@ -160,26 +159,19 @@ key_var_for_provider() {
   esac
 }
 
-# Pick up an API key from the environment; records which var it came from
-detect_key_env() {
+load_key_for_provider() {
   API_KEY=""
-  KEY_ENV_VAR=""
-  KEY_FROM_ENV=0
-  local kv
-  for kv in OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY; do
-    if [[ -n "${!kv:-}" ]]; then
-      API_KEY="${!kv}"
-      KEY_ENV_VAR="$kv"
-      KEY_FROM_ENV=1
-      return 0
-    fi
-  done
+  API_KEY_PROVIDER=""
+  case "${1:-}" in
+    openrouter) API_KEY="${OPENROUTER_API_KEY:-}" ;;
+    openai)     API_KEY="${OPENAI_API_KEY:-}" ;;
+    anthropic)  API_KEY="${ANTHROPIC_API_KEY:-}" ;;
+    gemini)     API_KEY="${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ;;
+  esac
+  [[ -n "$API_KEY" ]] && API_KEY_PROVIDER="${1:-}"
+  return 0
 }
 
-# Env fills gaps only when not set by CLI
-if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
-  detect_key_env
-fi
 if [[ "$PROVIDER_FROM_CLI" -eq 0 && -n "${FX_PROVIDER:-}" ]]; then
   PROVIDER="$FX_PROVIDER"
   PROVIDER_FROM_ENV=1
@@ -201,7 +193,11 @@ err()   { printf '\033[31m✗\033[0m %s\n' "$*" >&2; }
 require_single_line() {
   local name="$1" value="$2"
   if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-    err "$name must not contain newline characters"
+    err "Refusing to serialize $name: $name must not contain newline characters"
+    return 1
+  fi
+  if [[ "$value" == *"$MARKER_BEGIN"* || "$value" == *"$MARKER_END"* ]]; then
+    err "Refusing to serialize $name containing a managed-block marker"
     return 1
   fi
 }
@@ -295,7 +291,7 @@ validate_marked_block() {
       exit 1
     }
   ' "$target"; then
-    err "Malformed $label block in $rc_file; leaving it unchanged"
+    err "Malformed $label block in $rc_file; expected exactly one balanced $label block; leaving it unchanged"
     return 1
   fi
 }
@@ -419,25 +415,17 @@ load_existing_config() {
     info "Keeping existing FX_VARIANT from $authoritative_rc"
   fi
   key_var="$(key_var_for_provider "${requested_provider:-$PROVIDER}")"
-  if [[ "$KEY_FROM_CLI" -eq 0 ]]; then
-    API_KEY=""
-    KEY_FROM_ENV=0
-    KEY_ENV_VAR=""
-    if [[ -n "$key_var" && -n "${!key_var:-}" ]]; then
-      API_KEY="${!key_var}"
-      KEY_ENV_VAR="$key_var"
-      KEY_FROM_ENV=1
-    elif [[ "$key_var" == GEMINI_API_KEY && -n "${GOOGLE_API_KEY:-}" ]]; then
-      API_KEY="$GOOGLE_API_KEY"
-      KEY_ENV_VAR=GOOGLE_API_KEY
-      KEY_FROM_ENV=1
+  load_key_for_provider "${requested_provider:-$PROVIDER}"
+  if [[ -n "$authoritative_rc" && -n "$key_var" && -z "$API_KEY" ]]; then
+    candidate="$(read_managed_value "$authoritative_rc" "$key_var")" || candidate=""
+    if [[ -z "$candidate" && "$key_var" == GEMINI_API_KEY ]]; then
+      candidate="$(read_managed_value "$authoritative_rc" GOOGLE_API_KEY)" || candidate=""
     fi
-  fi
-  if [[ -n "$authoritative_rc" && -n "$key_var" && "$KEY_FROM_CLI" -eq 0 && "$KEY_FROM_ENV" -eq 0 && -z "$API_KEY" ]] && \
-     candidate="$(read_managed_value "$authoritative_rc" "$key_var")"; then
-    API_KEY="$candidate"
-    KEY_ENV_VAR="$key_var"
-    info "Keeping existing $key_var from $authoritative_rc"
+    if [[ -n "$candidate" ]]; then
+      API_KEY="$candidate"
+      API_KEY_PROVIDER="${requested_provider:-$PROVIDER}"
+      info "Keeping existing $key_var from $authoritative_rc"
+    fi
   fi
 }
 
@@ -686,6 +674,13 @@ read_tty() {
   else
     IFS= read -r _val || true
   fi
+  _val="${_val//$'\r'/}"
+  printf -v "$_var" '%s' "$_val"
+}
+
+read_tty_secret() {
+  local _var="$1" _prompt="${2:-}" _val=""
+  _val="$(python3 -c 'import getpass, sys; print(getpass.getpass(sys.argv[1]))' "$_prompt")" || return 1
   _val="${_val//$'\r'/}"
   printf -v "$_var" '%s' "$_val"
 }
@@ -963,8 +958,7 @@ stage_runtime() {
   ok "Staged and validated runtime"
 }
 
-detect_ai_clis() {
-  local runtime_dir="${1:-$INSTALL_DIR}"
+discover_ai_clis() {
   HAVE_OPENCODE=0
   HAVE_CLAUDE=0
   HAVE_CODEX=0
@@ -972,6 +966,7 @@ detect_ai_clis() {
   have opencode && HAVE_OPENCODE=1
   have claude && HAVE_CLAUDE=1
   have codex && HAVE_CODEX=1
+  have agy && HAVE_ANTIGRAVITY=1
   if [[ "$HAVE_OPENCODE" -eq 1 ]]; then
     ok "Detected OpenCode CLI ($(command -v opencode))"
   fi
@@ -981,15 +976,26 @@ detect_ai_clis() {
   if [[ "$HAVE_CODEX" -eq 1 ]]; then
     ok "Detected Codex CLI ($(command -v codex))"
   fi
-  if have agy && FX_PROVIDER=antigravity FX_AI_READY_TIMEOUT=10 bash -c '
-    source "$1"
-    _fx_ai_ready
-  ' bash "$runtime_dir/fixit-common.sh"; then
-    HAVE_ANTIGRAVITY=1
+  if [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
     ok "Detected Antigravity CLI ($(command -v agy))"
-  elif have agy; then
-    warn "Antigravity CLI found but not authenticated; run agy to sign in"
   fi
+}
+
+validate_selected_provider() {
+  case "$PROVIDER" in
+    opencode)
+      [[ "$HAVE_OPENCODE" -eq 1 ]] || { err "OpenCode CLI not found on PATH"; return 1; }
+      ;;
+    claude)
+      [[ "$HAVE_CLAUDE" -eq 1 ]] || { err "Claude Code CLI not found on PATH"; return 1; }
+      ;;
+    codex)
+      [[ "$HAVE_CODEX" -eq 1 ]] || { err "Codex CLI not found on PATH"; return 1; }
+      ;;
+    antigravity)
+      [[ "$HAVE_ANTIGRAVITY" -eq 1 ]] || { err "Antigravity CLI not found on PATH"; return 1; }
+      ;;
+  esac
 }
 
 normalize_provider() {
@@ -1008,9 +1014,23 @@ normalize_provider() {
   esac
 }
 
+provider_from_key_env() {
+  local found="" count=0
+  if [[ -n "${OPENROUTER_API_KEY:-}" ]]; then found="openrouter"; count=$((count+1)); fi
+  if [[ -n "${OPENAI_API_KEY:-}" ]]; then found="openai"; count=$((count+1)); fi
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then found="anthropic"; count=$((count+1)); fi
+  if [[ -n "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]]; then found="gemini"; count=$((count+1)); fi
+  if [[ "$count" -eq 1 ]]; then
+    printf '%s' "$found"
+    return 0
+  fi
+  [[ "$count" -eq 0 ]] && return 1
+  return 2
+}
+
 # ---------- provider selection ----------
 select_provider() {
-  local p
+  local p env_provider env_status
   # Explicit CLI --provider always wins (interactive or not)
   if [[ "$PROVIDER_FROM_CLI" -eq 1 ]]; then
     p="$(normalize_provider "$PROVIDER")"
@@ -1030,13 +1050,17 @@ select_provider() {
       ok "Provider: $PROVIDER"
       return 0
     fi
-    if [[ -n "$API_KEY" ]]; then
-      case "${KEY_ENV_VAR:-OPENROUTER_API_KEY}" in
-        OPENAI_API_KEY)                  PROVIDER="openai" ;;
-        ANTHROPIC_API_KEY)               PROVIDER="anthropic" ;;
-        GEMINI_API_KEY|GOOGLE_API_KEY)   PROVIDER="gemini" ;;
-        *)                               PROVIDER="openrouter" ;;
-      esac
+    if env_provider="$(provider_from_key_env)"; then
+      PROVIDER="$env_provider"
+    else
+      env_status=$?
+      if [[ "$env_status" -eq 2 ]]; then
+        err "Multiple provider API keys are set; choose one with --provider or FX_PROVIDER."
+        exit 1
+      fi
+    fi
+    if [[ -n "$PROVIDER" ]]; then
+      :
     elif [[ "$HAVE_OPENCODE" -eq 1 ]]; then
       PROVIDER="opencode"
     elif [[ "$HAVE_CLAUDE" -eq 1 ]]; then
@@ -1149,6 +1173,9 @@ PYKEY
 maybe_ask_key() {
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
+  if [[ "$API_KEY_PROVIDER" != "$PROVIDER" ]]; then
+    load_key_for_provider "$PROVIDER"
+  fi
   [[ -n "$key_var" ]] || return 0
 
   local label key_url
@@ -1158,12 +1185,6 @@ maybe_ask_key() {
     anthropic)  label="Anthropic";     key_url="https://console.anthropic.com/settings/keys" ;;
     gemini)     label="Google Gemini"; key_url="https://aistudio.google.com/apikey" ;;
   esac
-
-  # Explicit --key wins
-  if [[ "$KEY_FROM_CLI" -eq 1 && -n "$API_KEY" ]]; then
-    ok "$label API key provided (from --key)"
-    return 0
-  fi
 
   if ! is_interactive; then
     if [[ -n "$API_KEY" ]]; then
@@ -1182,11 +1203,11 @@ maybe_ask_key() {
   echo "$label API key enables natural language."
   echo "Get one at: $key_url"
   [[ -n "$hint" ]] && echo "  $hint"
-  printf "Paste key now (Enter = keep/skip): "
   local typed=""
-  read_tty typed
+  read_tty_secret typed "Paste key now (Enter = keep/skip): "
   if [[ -n "$typed" ]]; then
     API_KEY="$typed"
+    API_KEY_PROVIDER="$PROVIDER"
     ok "API key saved for config"
   elif [[ -n "$API_KEY" ]]; then
     ok "Keeping existing $label API key"
@@ -1260,9 +1281,10 @@ select_model() {
       )
       ;;
     opencode)
-      # Full live list from the CLI (all providers configured in opencode)
-      local listed
-      listed="$(opencode models 2>/dev/null || true)"
+      local listed=""
+      if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+        listed="$(opencode models 2>/dev/null || true)"
+      fi
       if [[ -n "$listed" ]]; then
         while IFS= read -r line; do
           line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -1312,9 +1334,9 @@ select_model() {
       return 0
       ;;
     codex)
-      # Live catalog from the CLI (visibility=list only)
-      local listed
-      listed="$(codex debug models 2>/dev/null | python3 -c '
+      local listed=""
+      if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+        listed="$(codex debug models 2>/dev/null | python3 -c '
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -1325,6 +1347,7 @@ try:
 except Exception:
     pass
 ' 2>/dev/null || true)"
+      fi
       if [[ -n "$listed" ]]; then
         while IFS= read -r slug; do
           [[ -n "$slug" ]] && models+=("$slug")
@@ -1362,8 +1385,10 @@ except Exception:
       return 0
       ;;
     antigravity)
-      local listed
-      listed="$(agy models 2>/dev/null || true)"
+      local listed=""
+      if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+        listed="$(agy models 2>/dev/null || true)"
+      fi
       if [[ -n "$listed" ]]; then
         while IFS= read -r line; do
           line="$(echo "$line" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
@@ -1434,10 +1459,17 @@ select_variant() {
     return 0
   fi
 
+  if ! is_interactive; then
+    [[ -n "$VARIANT" ]] && ok "Reasoning: $VARIANT" || ok "Reasoning: (model default)"
+    return 0
+  fi
+
   local -a levels=() def_level=""
   if [[ "$PROVIDER" == "codex" ]]; then
     local info_line
-    info_line="$(codex debug models 2>/dev/null | python3 -c '
+    info_line=""
+    if [[ "$SKIP_AI_TEST" -eq 0 ]]; then
+      info_line="$(codex debug models 2>/dev/null | python3 -c '
 import json, sys
 want = sys.argv[1] if len(sys.argv) > 1 else ""
 try:
@@ -1456,6 +1488,7 @@ if pick:
     lv = [x["effort"] for x in pick.get("supported_reasoning_levels", [])]
     print((pick.get("default_reasoning_level") or "") + "|" + ",".join(lv))
 ' "${MODEL:-}" 2>/dev/null || true)"
+    fi
     def_level="${info_line%%|*}"
     if [[ "$info_line" == *"|"* ]]; then
       local csv="${info_line#*|}" lvl
@@ -1475,11 +1508,6 @@ if pick:
     levels=(low medium high)
   else
     levels=(low medium high)
-  fi
-
-  if ! is_interactive; then
-    [[ -n "$VARIANT" ]] && ok "Reasoning: $VARIANT" || ok "Reasoning: (model default)"
-    return 0
   fi
 
   local hint="$VARIANT"
@@ -1513,29 +1541,13 @@ if pick:
 
 # ---------- smoke test ----------
 test_ai() {
-  if [[ "$PROVIDER" == "antigravity" && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
-    err "Antigravity CLI is unavailable or not authenticated; run agy to sign in"
-    return 1
-  fi
   [[ "$SKIP_AI_TEST" -eq 1 ]] && return 0
   [[ "$PROVIDER" == "none" ]] && return 0
 
   local key_var
   key_var="$(key_var_for_provider "$PROVIDER")"
-  if [[ -n "$key_var" && -z "$API_KEY" ]]; then
+  if [[ -n "$key_var" && ( -z "$API_KEY" || "$API_KEY_PROVIDER" != "$PROVIDER" ) ]]; then
     warn "Skipping AI test (no API key)"
-    return 0
-  fi
-  if [[ "$PROVIDER" == "opencode" && "$HAVE_OPENCODE" -eq 0 ]]; then
-    warn "Skipping AI test (opencode missing)"
-    return 0
-  fi
-  if [[ "$PROVIDER" == "claude" && "$HAVE_CLAUDE" -eq 0 ]]; then
-    warn "Skipping AI test (claude missing)"
-    return 0
-  fi
-  if [[ "$PROVIDER" == "codex" && "$HAVE_CODEX" -eq 0 ]]; then
-    warn "Skipping AI test (codex missing)"
     return 0
   fi
   info "Testing AI backend ($PROVIDER)…"
@@ -1550,15 +1562,16 @@ test_ai() {
   # background + watchdog: CLI backends can queue for a long time
   local tmpout pid waited=0 limit=120
   tmpout="$(mktemp)"
-  local -a envargs=(
-    "FX_PROVIDER=$PROVIDER"
-    "FX_MODEL=$MODEL"
-    "FX_VARIANT=$VARIANT"
-    "FX_AI_TIMEOUT=100"
-  )
-  [[ -n "$key_var" ]] && envargs+=("${key_var}=${API_KEY}")
   (
-    env "${envargs[@]}" \
+    unset OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
+    if [[ -n "$key_var" ]]; then
+      printf -v "$key_var" '%s' "$API_KEY"
+      export "${key_var?}"
+    fi
+    FX_PROVIDER="$PROVIDER" \
+    FX_MODEL="$MODEL" \
+    FX_VARIANT="$VARIANT" \
+    FX_AI_TIMEOUT=100 \
     "$test_shell" -c '
       source "$1"
       _fx_ai "print only this exact shell command on one line: ls -la"
@@ -1590,6 +1603,10 @@ test_ai() {
   set -e
 
   sug="$(echo "$sug" | head -1 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+  if [[ "$rc" -eq 126 ]] && ! is_interactive; then
+    err "$PROVIDER cannot guarantee read-only/no-tools confinement; configuration was not written"
+    return 1
+  fi
   if [[ -n "$sug" ]]; then
     ok "AI test OK → $sug"
     return 0
@@ -1615,8 +1632,8 @@ test_ai() {
     2)
       PROVIDER=""
       MODEL=""
-      detect_key_env
       select_provider
+      validate_selected_provider
       maybe_ask_key
       select_model
       select_variant
@@ -1848,7 +1865,7 @@ prepare_rc_block() {
     anthropic)  key_placeholder="sk-ant-..." ;;
     gemini)     key_placeholder="AIza..." ;;
   esac
-  if [[ -n "$key_var" && -n "$API_KEY" ]]; then
+  if [[ -n "$key_var" && -n "$API_KEY" && "$API_KEY_PROVIDER" == "$PROVIDER" ]]; then
     key_line="export ${key_var}=$(shell_quote "$API_KEY")"
     stores_api_key=1
   elif [[ -n "$key_var" ]]; then
@@ -2276,8 +2293,9 @@ main() {
   load_existing_config
   begin_install_transaction
   stage_runtime
-  detect_ai_clis "$TX_STAGE"
+  discover_ai_clis
   select_provider
+  validate_selected_provider
   maybe_ask_key
   select_model
   select_variant

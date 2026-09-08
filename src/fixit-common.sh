@@ -245,13 +245,9 @@ _fx_handle_not_found() {
   return 127
 }
 
-# True when a line contains an obvious secret shape — those are never sent to AI.
-_fx_has_secrets() {
-  printf '%s' "$1" | grep -Eq \
-    -e '(--password|--passwd|--token)(=|[[:space:]])[^[:space:]]' \
-    -e 'Bearer[[:space:]]+[A-Za-z0-9._~+-]+' \
-    -e 'sk-[A-Za-z0-9_-]{8,}' \
-    -e '[A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*=[^[:space:]'"'"']'
+# True when stdin contains a known secret shape — those lines are never sent to AI.
+_fx_has_secrets() {  # stdin -> status
+  python3 "$_FX_AI_PY" secrets-detect
 }
 
 # Shared failed-command logic. $1 = exit code, $2 = raw failed line.
@@ -285,7 +281,7 @@ _fx_fix_failed_line() {
   _fx_ai_ready || return
   [[ -n "$head" && -n "${tail//[[:space:]]/}" ]] || return
   _fx_in_list "$head" "${_FX_MULTICMD[@]}" || return
-  if _fx_has_secrets "$_FX_LASTFAIL"; then
+  if printf '%s' "$_FX_LASTFAIL" | _fx_has_secrets; then
     printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
     return
   fi
@@ -300,13 +296,8 @@ _fx_ai_sys_prompt() {
   printf '%s' "You translate user intent or broken shell commands into ONE correct shell command line for their machine. Reply with ONLY the command on the first line — no markdown fences, no backticks, no explanation, no thinking, do not run anything. Use the user's own aliases and project scripts (package.json scripts, make targets) when they fit. To start/run something, prefer the project's own script. On macOS, viewing/opening a file means the open command (e.g. open index.html for a browser, open -a Numbers file.xlsx); on Linux use xdg-open. If the action is destructive or irreversible, prefix with: # DANGER: "
 }
 
-# Mask common secret shapes before anything is sent to an AI provider.
 _fx_redact_secrets() {  # stdin -> stdout
-  sed -E \
-    -e 's/(--password|--passwd|--token)(=|[[:space:]]+)[^[:space:]]+/\1\2[REDACTED]/g' \
-    -e 's/(Bearer[[:space:]]+)[A-Za-z0-9._~+-]+/\1[REDACTED]/g' \
-    -e 's/sk-[A-Za-z0-9_-]{8,}/[REDACTED-KEY]/g' \
-    -e 's/([A-Za-z_][A-Za-z0-9_]*(KEY|TOKEN|SECRET|PASSWD|PASSWORD)[A-Za-z0-9_]*)=[^[:space:]'"'"']+/\1=[REDACTED]/g'
+  python3 "$_FX_AI_PY" secrets-redact
 }
 
 # Strip terminal control bytes (ANSI escapes, cursor moves) from untrusted text.
@@ -316,7 +307,7 @@ _fx_strip_ctrl() {  # stdin -> stdout (keeps newline/tab)
 
 _fx_ai_user_payload() {  # $* = intent
   local ctx lsal proj als task
-  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $PWD"
+  ctx="OS: $(uname -sm); shell: $(_fx_shell_name); cwd: $(printf '%s' "$PWD" | _fx_redact_secrets)"
   lsal="$(ls -al 2>/dev/null | _fx_strip_ctrl | head -20 | _fx_redact_secrets)"
   proj="$(python3 "$_FX_AI_PY" proj 2>/dev/null | _fx_strip_ctrl | _fx_redact_secrets)"
   als="$(alias 2>/dev/null | _fx_strip_ctrl | head -30 | _fx_redact_secrets)"
@@ -328,14 +319,60 @@ _fx_shell_name() {
   if [[ -n "${ZSH_VERSION:-}" ]]; then printf 'zsh'; else printf 'bash'; fi
 }
 
+_fx_help_has_options() {
+  local help="$1"
+  shift
+  printf '%s\n' "$help" | python3 "$_FX_AI_PY" help-options "$@"
+}
+
+_fx_confinement_error() {
+  printf '\033[31m? %s cannot prove read-only/no-tools support; update the CLI or choose an HTTP provider\033[0m\n' "$1" >&2
+  return 126
+}
+
+_fx_antigravity_confinement_supported() {
+  if [[ -z "${_FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED+x}" ]]; then
+    local help
+    _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=0
+    if help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy --help 2>&1)"; then
+      if _fx_help_has_options "$help" --sandbox --mode=plan --disable-slash-commands \
+          --input-format --output-format; then
+        _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
+      fi
+    fi
+  fi
+  [[ "$_FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED" == 1 ]]
+}
+
 _fx_antigravity_ready() {
-  command -v agy >/dev/null 2>&1 || return 1
+  _fx_provider_executable agy >/dev/null 2>&1 || return 1
+  if ! _fx_antigravity_confinement_supported; then
+    _FX_ANTIGRAVITY_CONFINEMENT_FAILED=1
+    return 1
+  fi
+  unset _FX_ANTIGRAVITY_CONFINEMENT_FAILED
   [[ "${_FX_ANTIGRAVITY_READY:-}" == "1" ]] && return 0
-  if _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy -p /usage --output-format text >/dev/null; then
+  local run_dir rc=0
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fixit-agy-ready.XXXXXX")" || return 1
+  (
+    cd "$run_dir" || exit 1
+    _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy -p /usage --output-format text \
+      --sandbox --mode plan --disable-slash-commands >/dev/null
+  ) || rc=$?
+  rm -rf "$run_dir"
+  if (( rc == 0 )); then
     _FX_ANTIGRAVITY_READY=1
     return 0
   fi
   return 1
+}
+
+_fx_provider_executable() {
+  if [[ -n "${ZSH_VERSION:-}" ]]; then
+    whence -p "$1"
+  else
+    type -P "$1"
+  fi
 }
 
 _fx_ai_ready() {
@@ -344,17 +381,40 @@ _fx_ai_ready() {
     openai)     [[ -n "${OPENAI_API_KEY:-}" ]] ;;
     anthropic)  [[ -n "${ANTHROPIC_API_KEY:-}" ]] ;;
     gemini)     [[ -n "${GEMINI_API_KEY:-${GOOGLE_API_KEY:-}}" ]] ;;
-    opencode)   command -v opencode >/dev/null 2>&1 ;;
-    claude)     command -v claude >/dev/null 2>&1 ;;
-    codex)      command -v codex >/dev/null 2>&1 ;;
+    opencode)   _fx_provider_executable opencode >/dev/null 2>&1 ;;
+    claude)     _fx_provider_executable claude >/dev/null 2>&1 ;;
+    codex)      _fx_provider_executable codex >/dev/null 2>&1 ;;
     antigravity) _fx_antigravity_ready ;;
     none|off|local|"") return 1 ;;
     *) return 1 ;;
   esac
 }
 
-_fx_ai_extract() {  # stdin: free text or JSON/JSONL -> one command on stdout
-  python3 "$_FX_AI_PY" extract
+_fx_ai_extract() {  # $1=provider output kind; stdin -> one command on stdout
+  FX_COMMAND_NAMES="$(_fx_all_commands)" python3 "$_FX_AI_PY" extract "$1"
+}
+
+_fx_curl_config_header() {
+  local value="$1"
+  case "$value" in
+    *$'\r'*|*$'\n'*) return 1 ;;
+  esac
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf 'header = "%s"\n' "$value"
+}
+
+_fx_transport_extract() {
+  local kind="$1" output rc=0
+  shift
+  output="$(mktemp "${TMPDIR:-/tmp}/fixit-output.XXXXXX")" || return 1
+  "$@" >"$output" || rc=$?
+  if (( rc == 0 )); then
+    _fx_ai_extract "$kind" <"$output"
+    rc=$?
+  fi
+  rm -f "$output"
+  return "$rc"
 }
 
 
@@ -362,9 +422,12 @@ _fx_ai_http() {  # $1=json body $2=url $3..=extra headers -> raw api response (o
   # Key (inside headers) and body go via stdin/tempfile, never argv (ps-visible to local users).
   local body="$1" url="$2" body_file rc h
   shift 2
+  for h in "$@"; do
+    _fx_curl_config_header "$h" >/dev/null || return 2
+  done
   body_file="$(mktemp "${TMPDIR:-/tmp}/fixit-body.XXXXXX")" || return 1
   printf '%s' "$body" > "$body_file"
-  for h in "$@"; do printf 'header = "%s"\n' "$h"; done | \
+  for h in "$@"; do _fx_curl_config_header "$h"; done | \
     curl -sS --connect-timeout 10 --max-time 45 --retry 1 --retry-delay 1 \
       -K - -H "Content-Type: application/json" --data-binary @"$body_file" \
       "$url"
@@ -378,9 +441,10 @@ _fx_ai_openrouter() {  # $* = intent
   local sys_p user_p body
   sys_p="$(_fx_ai_sys_prompt)"
   user_p="$(_fx_ai_user_payload "$@")"
-  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
-  _fx_ai_http "$body" https://openrouter.ai/api/v1/chat/completions \
-    "Authorization: Bearer $OPENROUTER_API_KEY" | _fx_ai_extract
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-openrouter)
+  _fx_transport_extract chat _fx_ai_http "$body" \
+    https://openrouter.ai/api/v1/chat/completions \
+    "Authorization: Bearer $OPENROUTER_API_KEY"
 }
 
 _fx_ai_openai() {  # $* = intent
@@ -388,9 +452,10 @@ _fx_ai_openai() {  # $* = intent
   local sys_p user_p body
   sys_p="$(_fx_ai_sys_prompt)"
   user_p="$(_fx_ai_user_payload "$@")"
-  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body)
-  _fx_ai_http "$body" https://api.openai.com/v1/chat/completions \
-    "Authorization: Bearer $OPENAI_API_KEY" | _fx_ai_extract
+  body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-openai)
+  _fx_transport_extract chat _fx_ai_http "$body" \
+    https://api.openai.com/v1/chat/completions \
+    "Authorization: Bearer $OPENAI_API_KEY"
 }
 
 _fx_ai_anthropic() {  # $* = intent
@@ -399,8 +464,9 @@ _fx_ai_anthropic() {  # $* = intent
   sys_p="$(_fx_ai_sys_prompt)"
   user_p="$(_fx_ai_user_payload "$@")"
   body=$(FX_SYS="$sys_p" FX_USER="$user_p" FX_MODEL="$model" python3 "$_FX_AI_PY" body-anthropic)
-  _fx_ai_http "$body" https://api.anthropic.com/v1/messages \
-    "x-api-key: $ANTHROPIC_API_KEY" "anthropic-version: 2023-06-01" | _fx_ai_extract
+  _fx_transport_extract anthropic _fx_ai_http "$body" \
+    https://api.anthropic.com/v1/messages \
+    "x-api-key: $ANTHROPIC_API_KEY" "anthropic-version: 2023-06-01"
 }
 
 _fx_ai_gemini() {  # $* = intent
@@ -410,87 +476,137 @@ _fx_ai_gemini() {  # $* = intent
   user_p="$(_fx_ai_user_payload "$@")"
   body=$(FX_SYS="$sys_p" FX_USER="$user_p" python3 "$_FX_AI_PY" body-gemini)
   key="${GEMINI_API_KEY:-$GOOGLE_API_KEY}"
-  _fx_ai_http "$body" \
+  _fx_transport_extract gemini _fx_ai_http "$body" \
     "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent" \
-    "x-goog-api-key: $key" | _fx_ai_extract
+    "x-goog-api-key: $key"
 }
 
-# Portable timeout (no GNU timeout on stock macOS). Kills cmd after N secs.
 _fx_timeout() {  # $1=seconds, $2...=cmd
   local secs="$1"; shift
-  local tmpout tmpin="" rc=0
-  tmpout="$(mktemp)"
-  if [[ ! -t 0 ]]; then
-    tmpin="$(mktemp)"
-    cat >"$tmpin"
-  fi
-  if [[ -n "$tmpin" ]]; then
-    "$@" <"$tmpin" >"$tmpout" 2>/dev/null &
-  else
-    "$@" </dev/null >"$tmpout" 2>/dev/null &
-  fi
-  local pid=$!
-  local waited=0
-  while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= secs )); then
-      kill "$pid" 2>/dev/null
-      sleep 1
-      kill -9 "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      rc=124
-      break
+  local executable
+  executable="$(_fx_provider_executable "$1")" || return 127
+  shift
+  python3 "$_FX_AI_PY" timeout "$secs" "$executable" "$@"
+}
+
+_fx_opencode_confinement_supported() {
+  if [[ -z "${_FX_OPENCODE_CONFINEMENT_SUPPORTED+x}" ]]; then
+    local help
+    _FX_OPENCODE_CONFINEMENT_SUPPORTED=0
+    if help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" opencode run --help 2>&1)" && \
+        _fx_help_has_options "$help" --pure --format; then
+      _FX_OPENCODE_CONFINEMENT_SUPPORTED=1
     fi
-    sleep 1
-    (( waited += 1 ))
-  done
-  if (( rc == 0 )); then
-    wait "$pid" 2>/dev/null || rc=$?
   fi
-  cat "$tmpout"
-  rm -f "$tmpout"
-  [[ -n "$tmpin" ]] && rm -f "$tmpin"
-  return $rc
+  [[ "$_FX_OPENCODE_CONFINEMENT_SUPPORTED" == 1 ]] || return 1
+
+  local deny_config resolved
+  deny_config='{"permission":{"*":"deny"},"tools":{"*":false}}'
+  resolved="$(OPENCODE_CONFIG_CONTENT="$deny_config" \
+    _fx_timeout "${FX_AI_READY_TIMEOUT:-10}" opencode debug config --pure 2>&1)" && \
+    printf '%s' "$resolved" | python3 "$_FX_AI_PY" opencode-config-deny
 }
 
 _fx_ai_opencode() {  # $* = intent
-  local prompt margs=()
+  local prompt deny_config margs=()
+  _fx_opencode_confinement_supported || { _fx_confinement_error opencode; return; }
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
+  deny_config='{"permission":{"*":"deny"},"tools":{"*":false}}'
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(--variant "$FX_VARIANT")
-  _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run "${margs[@]}" --format json -- "$prompt" | _fx_ai_extract
+  OPENCODE_CONFIG_CONTENT="$deny_config" _fx_transport_extract opencode \
+    _fx_timeout "${FX_AI_TIMEOUT:-90}" opencode run --pure \
+      "${margs[@]}" --format json -- "$prompt"
+}
+
+_fx_claude_confinement_supported() {
+  if [[ -z "${_FX_CLAUDE_CONFINEMENT_SUPPORTED+x}" ]]; then
+    local help
+    _FX_CLAUDE_CONFINEMENT_SUPPORTED=0
+    if help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" claude --help 2>&1)"; then
+      if _fx_help_has_options "$help" --tools --permission-mode=plan --safe-mode \
+          --disable-slash-commands --strict-mcp-config --mcp-config \
+          --no-session-persistence; then
+        _FX_CLAUDE_CONFINEMENT_SUPPORTED=1
+      fi
+    fi
+  fi
+  [[ "$_FX_CLAUDE_CONFINEMENT_SUPPORTED" == 1 ]]
 }
 
 _fx_ai_claude() {  # $* = intent
   local prompt margs=()
+  _fx_claude_confinement_supported || { _fx_confinement_error claude; return; }
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(--model "$FX_MODEL")
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(--effort "$FX_VARIANT")
   # Prompt via stdin so it is not visible in `ps` to other local users.
-  printf '%s' "$prompt" | _fx_timeout "${FX_AI_TIMEOUT:-90}" \
-    claude -p --output-format json --max-turns 1 "${margs[@]}" | _fx_ai_extract
+  printf '%s' "$prompt" | _fx_transport_extract claude \
+    _fx_timeout "${FX_AI_TIMEOUT:-90}" claude -p \
+      --output-format json --max-turns 1 --tools "" \
+      --permission-mode plan --safe-mode --disable-slash-commands \
+      --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+      --no-session-persistence "${margs[@]}"
+}
+
+_fx_codex_confinement_supported() {
+  if [[ -z "${_FX_CODEX_CAPABILITIES_CHECKED+x}" ]]; then
+    local help
+    help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" codex exec --help 2>&1)" || help=""
+    _FX_CODEX_CAPABILITIES_CHECKED=1
+    _FX_CODEX_CONFINEMENT_SUPPORTED=0
+    if _fx_help_has_options "$help" --sandbox=read-only --ignore-user-config \
+        --ignore-rules --ephemeral; then
+      _FX_CODEX_CONFINEMENT_SUPPORTED=1
+    fi
+    if _fx_help_has_options "$help" --output-last-message; then
+      _FX_CODEX_OUTPUT_FILE_OPTION=--output-last-message
+    elif _fx_help_has_options "$help" -o; then
+      _FX_CODEX_OUTPUT_FILE_OPTION=-o
+    else
+      _FX_CODEX_OUTPUT_FILE_OPTION=""
+    fi
+  fi
+  [[ "$_FX_CODEX_CONFINEMENT_SUPPORTED" == 1 ]]
 }
 
 _fx_ai_codex() {  # $* = intent
-  local prompt out margs=()
+  local prompt out run_dir rc=0 margs=()
+  _fx_codex_confinement_supported || { _fx_confinement_error codex; return; }
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   [[ -n "${FX_MODEL:-}" ]] && margs+=(-m "$FX_MODEL")
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(-c "model_reasoning_effort=\"$FX_VARIANT\"")
-  out="$(mktemp)"
+  out="$(mktemp)" || return 1
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fixit-codex.XXXXXX")" || { rm -f "$out"; return 1; }
   # last message only; ephemeral; allow outside git repos
   # </dev/null so codex does not wait for extra stdin ("Reading additional input…")
-  if _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      -o "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null 2>&1; then
-    _fx_ai_extract <"$out"
+  if [[ -n "$_FX_CODEX_OUTPUT_FILE_OPTION" ]]; then
+    (
+      cd "$run_dir" || exit 1
+      _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
+        --sandbox read-only --ignore-user-config --ignore-rules \
+        "$_FX_CODEX_OUTPUT_FILE_OPTION" "$out" "${margs[@]}" -- "$prompt" </dev/null >/dev/null
+    ) || rc=$?
   else
-    # fallback: capture stdout if -o failed / older CLI
-    _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
-      "${margs[@]}" -- "$prompt" </dev/null 2>/dev/null | _fx_ai_extract
+    (
+      cd "$run_dir" || exit 1
+      _fx_timeout "${FX_AI_TIMEOUT:-90}" codex exec --ephemeral --skip-git-repo-check --color never \
+        --sandbox read-only --ignore-user-config --ignore-rules \
+        "${margs[@]}" -- "$prompt" </dev/null >"$out"
+    ) || rc=$?
   fi
+  if (( rc == 0 )); then
+    _fx_ai_extract plain <"$out"
+    rc=$?
+  fi
+  rm -rf "$run_dir"
   rm -f "$out"
+  return "$rc"
 }
 
 _fx_ai_antigravity() {  # $* = intent
-  local prompt body run_dir response margs=()
+  local prompt body run_dir response rc=0 margs=()
+  _fx_antigravity_confinement_supported || { _fx_confinement_error antigravity; return; }
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   body="$(printf '%s' "$prompt" | python3 "$_FX_AI_PY" body-antigravity)"
   run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fixit-agy.XXXXXX")" || return 1
@@ -498,10 +614,13 @@ _fx_ai_antigravity() {  # $* = intent
   [[ -n "${FX_VARIANT:-}" ]] && margs+=(--effort "$FX_VARIANT")
   response="$(printf '%s\n' "$body" | (
     cd "$run_dir" || exit 1
-    _fx_timeout "${FX_AI_TIMEOUT:-90}" agy --input-format stream-json \
-      --output-format stream-json "${margs[@]}"
-  ) | _fx_ai_extract)"
+    _fx_transport_extract antigravity _fx_timeout "${FX_AI_TIMEOUT:-90}" \
+      agy --input-format stream-json \
+      --output-format stream-json --sandbox --mode plan \
+      --disable-slash-commands "${margs[@]}"
+  ))" || rc=$?
   rm -rf "$run_dir"
+  (( rc == 0 )) || return "$rc"
   printf '%s\n' "$response"
 }
 
@@ -544,7 +663,10 @@ _fx_ai_resolve() {   # called with the full original line
         printf '\033[31m? codex not found on PATH\033[0m\n' >&2
         ;;
       antigravity)
-        if command -v agy >/dev/null 2>&1; then
+        if [[ "${_FX_ANTIGRAVITY_CONFINEMENT_FAILED:-}" == 1 ]]; then
+          _fx_confinement_error antigravity
+          return $?
+        elif _fx_provider_executable agy >/dev/null 2>&1; then
           printf '\033[31m? agy authentication check failed; run agy to sign in and retry\033[0m\n' >&2
         else
           printf '\033[31m? agy not found on PATH\033[0m\n' >&2
@@ -557,8 +679,15 @@ _fx_ai_resolve() {   # called with the full original line
     return 127
   fi
   printf '\033[36m…resolving\033[0m\n' >&2
-  local sug
-  sug="$(_fx_ai "$@" | _fx_strip_ctrl)"
+  local sug output rc=0
+  output="$(mktemp "${TMPDIR:-/tmp}/fixit-resolve.XXXXXX")" || return 1
+  _fx_ai "$@" >"$output" || rc=$?
+  if (( rc != 0 )); then
+    rm -f "$output"
+    return "$rc"
+  fi
+  sug="$(_fx_strip_ctrl <"$output")"
+  rm -f "$output"
   if [[ -z "$sug" ]]; then
     printf '\033[31m? AI gave no answer (timeout/network/auth?)\033[0m\n' >&2
     return 127
@@ -570,7 +699,7 @@ _fx_ai_resolve() {   # called with the full original line
 # `fix` — send the last failed command for a corrected version
 fix() {
   [[ -z "${_FX_LASTFAIL:-}" ]] && { echo "nothing failed recently"; return; }
-  if _fx_has_secrets "$_FX_LASTFAIL"; then
+  if printf '%s' "$_FX_LASTFAIL" | _fx_has_secrets; then
     printf '\033[33m? not sending to %s — line looks like it contains a secret\033[0m\n' "${FX_PROVIDER:-openrouter}" >&2
     return 1
   fi
