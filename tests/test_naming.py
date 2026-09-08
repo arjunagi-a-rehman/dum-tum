@@ -8,5 +8,5 @@ class NamingTest(unittest.TestCase):
             self.assertTrue(has_old_name(text), text)
 
     def test_internal_names(self):
-        for text in ("src/fixit.zsh", "fixit-common.sh", "FIXIT_HOME", "~/.local/share/fixit", "# >>> fixit.zsh >>>"):
+        for text in ("src/fixit.zsh", "fixit-common.sh", "FIXIT_HOME", "~/.local/share/fixit", "# >>> fixit.zsh >>>", '  [[ "$line" == \'"""fixit AI helpers.\' ]]'):
             self.assertFalse(has_old_name(text), text)

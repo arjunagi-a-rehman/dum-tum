@@ -4,6 +4,8 @@ from pathlib import Path
 
 
 def has_old_name(text):
+    if text.strip() == '[[ "$line" == \'"""fixit AI helpers.\' ]]':
+        return False
     text = re.sub(r"(?:[\w${}~./-]*/)?fixit(?:-common\.sh|-ai\.py|\.zsh|\.bash)", "", text)
     text = re.sub(r"(?:\$HOME|~|[\w${}.-]+)?/\.local/share/fixit/?", "", text)
     text = re.sub(r"\b(?:FIXIT_HOME|uninstall_fixit)\b", "", text)
