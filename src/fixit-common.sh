@@ -677,6 +677,7 @@ _fx_ai_resolve() {   # called with the full original line
     printf '\033[31m? AI gave no answer (timeout/network/auth?)\033[0m\n' >&2
     return 127
   fi
+  [[ "${_FX_ZLE_CONFIRM:-0}" == 1 ]] && _FX_ZLE_RESOLVED=1
   _fx_confirm_run "$sug" && return $?
   return 127
 }
