@@ -604,7 +604,7 @@ _fx_ai_antigravity() {  # $* = intent
     _fx_transport_extract antigravity _fx_timeout "${FX_AI_TIMEOUT:-90}" \
       agy --input-format stream-json \
       --output-format stream-json --sandbox --mode plan \
-      --disable-slash-commands "${margs[@]}"
+      --disable-slash-commands ${margs[@]+"${margs[@]}"}
   ))" || rc=$?
   rm -rf "$run_dir"
   (( rc == 0 )) || return "$rc"
