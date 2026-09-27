@@ -1,16 +1,28 @@
 const copyButtons = document.querySelectorAll("[data-copy]");
 
 for (const button of copyButtons) {
+  const originalText = button.textContent;
+  let resetTimer;
+  let clickVersion = 0;
+
   button.addEventListener("click", async () => {
-    const originalText = button.textContent;
+    const version = ++clickVersion;
+    window.clearTimeout(resetTimer);
+    let message;
+    let label;
     try {
       await navigator.clipboard.writeText(button.dataset.copy);
-      button.textContent = "[ copied ]";
-      button.setAttribute("aria-label", "Install command copied");
+      message = "[ copied ]";
+      label = "Install command copied";
     } catch {
-      button.textContent = "[ copy failed ]";
+      message = "[ copy failed ]";
+      label = "Install command copy failed";
     }
-    window.setTimeout(() => {
+
+    if (version !== clickVersion) return;
+    button.textContent = message;
+    button.setAttribute("aria-label", label);
+    resetTimer = window.setTimeout(() => {
       button.textContent = originalText;
       button.setAttribute("aria-label", "Copy install command");
     }, 2000);

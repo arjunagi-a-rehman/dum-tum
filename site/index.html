@@ -175,8 +175,8 @@
             <div class="example-table-head" role="row"><span role="columnheader">you type</span><span role="columnheader">dum-tum does</span><span role="columnheader">path</span></div>
             <div class="example-row" role="row"><code role="cell"><span>$</span> sl</code><p role="cell">corrects to <code>ls</code> and runs</p><span class="tag tag-local" role="cell">local</span></div>
             <div class="example-row" role="row"><code role="cell"><span>$</span> gti status</code><p role="cell">suggests <code>git status</code> for confirmation</p><span class="tag tag-review" role="cell">review</span></div>
-            <div class="example-row" role="row"><code role="cell"><span>$</span> list all files</code><p role="cell">suggests <code>ls -la</code> for confirmation</p><span class="tag tag-ai" role="cell">optional AI</span></div>
-            <div class="example-row" role="row"><code role="cell"><span>$</span> fix</code><p role="cell">suggests a fix for the last failed command</p><span class="tag tag-ai" role="cell">optional AI</span></div>
+            <div class="example-row" role="row"><code role="cell"><span>$</span> list all files</code><p role="cell">AI suggests <code>ls -la</code> for confirmation</p><span class="tag tag-ai" role="cell">optional AI</span></div>
+            <div class="example-row" role="row"><code role="cell"><span>$</span> fix</code><p role="cell">AI suggests a fix for the last failed command</p><span class="tag tag-ai" role="cell">optional AI</span></div>
           </div>
         </div>
       </section>
@@ -195,7 +195,7 @@
             <div class="policy-row"><span class="policy-key">local.other_correction</span><span class="policy-value policy-ask">ask first</span></div>
             <div class="policy-row"><span class="policy-key">ai.suggestion</span><span class="policy-value policy-ask">always ask first</span></div>
             <div class="policy-row"><span class="policy-key">provider.none</span><span class="policy-value">offline typo handling</span></div>
-            <p>AI mode sends your request and selected shell context to the provider. Review the <a href="https://github.com/arjunagi-a-rehman/dum-tum#safety" target="_blank" rel="noopener noreferrer">privacy details</a> if you work with sensitive data.</p>
+            <p>AI mode sends your request and selected shell context to the provider. With AI configured, eligible failed commands are also sent automatically by default (<code>FX_AI_ON_FAIL=1</code>). Set <code>FX_AI_ON_FAIL=0</code> to disable those automatic requests. Review the <a href="https://github.com/arjunagi-a-rehman/dum-tum#safety" target="_blank" rel="noopener noreferrer">privacy details</a> if you work with sensitive data.</p>
           </div>
         </div>
       </section>
