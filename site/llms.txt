@@ -1,0 +1,32 @@
+# dum-tum
+
+> dum-tum is a free, open-source typo and optional AI helper for zsh and Bash on macOS and Linux. It works when the user presses Enter in their normal shell.
+
+Website: https://arjunagi-a-rehman.github.io/dum-tum/
+Source and full documentation: https://github.com/arjunagi-a-rehman/dum-tum
+npm package: https://www.npmjs.com/package/dum-tum
+Install: `npx dum-tum@latest`
+License: MIT
+
+## Behavior
+
+- Safe, read-only typo corrections can run locally and automatically. Other corrections require confirmation.
+- Plain-English requests can be turned into shell commands with an optional AI provider. AI suggestions always require confirmation before running; the user can run, edit, or cancel.
+- Local-only mode handles typos without AI or network requests.
+- The `fix` command asks AI to suggest a fix for the last failed command.
+
+## Requirements
+
+- Python 3 and curl.
+- zsh 5+ or Bash 4+ on macOS or Linux for the full Enter-key hook.
+- The macOS bundled Bash 3.2 supports local typo handling only.
+
+## Safety and privacy
+
+AI mode may send the user request, current directory, directory entries, aliases, and project commands to the chosen provider. Secret detection and redaction are heuristic. Read the complete safety notes before using AI with sensitive work: https://github.com/arjunagi-a-rehman/dum-tum#safety
+
+## Further reading
+
+- Installation and provider setup: https://github.com/arjunagi-a-rehman/dum-tum#install-or-update
+- Configuration: https://github.com/arjunagi-a-rehman/dum-tum#configuration
+- Troubleshooting: https://github.com/arjunagi-a-rehman/dum-tum#troubleshooting
