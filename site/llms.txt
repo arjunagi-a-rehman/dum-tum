@@ -14,6 +14,7 @@ License: MIT
 - Plain-English requests can be turned into shell commands with an optional AI provider. AI suggestions always require confirmation before running; the user can run, edit, or cancel.
 - Local-only mode handles typos without AI or network requests.
 - The `fix` command asks AI to suggest a fix for the last failed command.
+- With AI configured, eligible failed commands are sent to the provider automatically by default. Set `FX_AI_ON_FAIL=0` to disable those automatic requests.
 
 ## Requirements
 
