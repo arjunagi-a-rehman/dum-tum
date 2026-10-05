@@ -417,8 +417,6 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
         provider_to_command = {
             "opencode": "opencode",
             "claude": "claude",
-            "codex": "codex",
-            "antigravity": "agy",
         }
         for provider, selected_command in provider_to_command.items():
             with self.subTest(provider=provider):

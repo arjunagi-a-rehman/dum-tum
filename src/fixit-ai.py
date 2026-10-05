@@ -25,6 +25,8 @@ import shutil
 import subprocess
 import shlex
 import sys
+import termios
+import unicodedata
 
 HEADS = {
     "find", "ls", "cd", "cat", "grep", "rg", "fd", "mdfind", "locate", "open", "git",
@@ -108,7 +110,7 @@ def _redact_secret_value(match) -> str:
 
 def redact_secrets(text: str) -> str:
     text = re.sub(
-        r'(?i)(["\'])(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+(?:\\.|(?!\1)[^\r\n])*\1',
+        r'(?i)(["\'])(\b(?:proxy-)?authorization\s*:\s*)(?:AWS4-HMAC-SHA256|Digest)\s+(?:\\.|(?!\1)[^\\\r\n])*\1',
         r'\1\2[REDACTED]\1', text,
     )
     text = re.sub(
@@ -186,7 +188,7 @@ class PayloadError(ValueError):
 
 def _report_error(err: object) -> None:
     msg = err.get("message", err) if isinstance(err, dict) else err
-    sys.stderr.write(f"AI error: {msg}\n")
+    sys.stderr.write(safe_terminal_text(f"AI error: {msg}\n"))
 
 
 def _json(raw: str) -> object:
@@ -359,12 +361,12 @@ def parse_payload(raw: str, provider: str = "plain") -> str:
         return raw
     parser = PARSERS.get(provider)
     if parser is None:
-        sys.stderr.write(f"AI output error: unknown provider output kind: {provider}\n")
+        sys.stderr.write(safe_terminal_text(f"AI output error: unknown provider output kind: {provider}\n"))
         return ""
     try:
         return parser(raw)
     except PayloadError as exc:
-        sys.stderr.write(f"AI output error ({provider}): {exc}\n")
+        sys.stderr.write(safe_terminal_text(f"AI output error ({provider}): {exc}\n"))
         return ""
 
 
@@ -373,6 +375,69 @@ def cmd_extract(provider: str = "plain") -> None:
     out = extract(parse_payload(raw, provider))
     if out:
         print(out)
+
+
+def safe_terminal_text(text: str) -> str:
+    return "".join(
+        char if char in "\n\t" or not unicodedata.category(char).startswith("C")
+        else (f"\\x{ord(char):02x}" if ord(char) < 256 else f"\\u{ord(char):04x}")
+        for char in text
+    )
+
+
+def command_is_display_safe(text: str) -> bool:
+    lines = text.split("\n")
+    if len(lines) > 1 and not (len(lines) == 2 and lines[0].startswith("# DANGER:")):
+        return False
+    if not text or any(unicodedata.category(char).startswith("C")
+                       for char in text if char != "\n"):
+        return False
+    for index, char in enumerate(text):
+        if char != "!":
+            continue
+        preceding = index - 1
+        while preceding >= 0 and text[preceding] == "\\":
+            preceding -= 1
+        if (index - preceding - 1) % 2:
+            continue
+        following = text[index + 1:index + 2]
+        if following and not following.isspace() and following != "=":
+            return False
+    return True
+
+
+def cmd_tty_choice() -> None:
+    message = safe_terminal_text(sys.stdin.read())
+    fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY)
+    original = termios.tcgetattr(fd)
+    try:
+        settings = termios.tcgetattr(fd)
+        settings[3] &= ~(termios.ICANON | termios.ECHO)
+        settings[6][termios.VMIN] = 1
+        settings[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSAFLUSH, settings)
+        os.write(fd, b"\x1b[0m" + message.encode())
+        choice = os.read(fd, 1)
+        os.write(fd, b"\n")
+        sys.stdout.write(choice.decode(errors="replace"))
+    finally:
+        termios.tcsetattr(fd, termios.TCSAFLUSH, original)
+        os.close(fd)
+
+
+def cmd_payload() -> None:
+    payload = {"os": os.uname().sysname, "shell": os.environ.get("FX_SHELL_NAME", ""),
+               "task": redact_secrets(os.environ.get("FX_TASK", ""))}
+    context = {"cwd": redact_secrets(os.getcwd()), "entries": [],
+               "project": proj_hints(),
+               "aliases": redact_secrets(os.environ.get("FX_ALIAS_HINTS", "")[:3000])}
+    with os.scandir() as entries:
+        for entry in entries:
+            context["entries"].append(redact_secrets(entry.name))
+            if len(context["entries"]) >= 20:
+                break
+    payload["untrusted_context"] = context
+    print(json.dumps(payload, ensure_ascii=True))
 
 
 def cmd_secrets_detect() -> None:
@@ -656,7 +721,7 @@ def _write_process_output(stdout: bytes, stderr: bytes) -> None:
         sys.stdout.buffer.write(stdout)
         sys.stdout.buffer.flush()
     if stderr:
-        sys.stderr.buffer.write(stderr)
+        sys.stderr.buffer.write(safe_terminal_text(stderr.decode(errors="replace")).encode())
         sys.stderr.buffer.flush()
 
 
@@ -683,7 +748,7 @@ def run_with_timeout(seconds: float, command: list) -> int:
         return 126
 
     handled_signals = tuple(
-        sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None))
+        sig for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGHUP", None), getattr(signal, "SIGINT", None))
         if sig is not None
     )
     previous_handlers = {sig: signal.getsignal(sig) for sig in handled_signals}
@@ -1041,19 +1106,22 @@ def proj_hints(cwd: str = ".") -> list:
     """Compact facts about the project in cwd that help pick the right command."""
     hints = []
     pkg = os.path.join(cwd, "package.json")
-    if os.path.isfile(pkg):
+    if os.path.isfile(pkg) and not os.path.islink(pkg):
         try:
             with open(pkg, encoding="utf-8") as fh:
-                scripts = (json.load(fh).get("scripts") or {})
+                scripts = (json.loads(fh.read(1024 * 1024)).get("scripts") or {})
         except Exception:
             scripts = {}
         if scripts:
-            hints.append("package.json scripts: " + ", ".join(scripts))
+            names = [name for name in scripts if isinstance(name, str) and
+                     re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}", name)][:12]
+            if names:
+                hints.append("package.json scripts: " + ", ".join(names))
     mk = os.path.join(cwd, "Makefile")
-    if os.path.isfile(mk):
+    if os.path.isfile(mk) and not os.path.islink(mk):
         try:
             with open(mk, encoding="utf-8", errors="replace") as fh:
-                raw = fh.read()
+                raw = fh.read(1024 * 1024)
             targets = [t for t in re.findall(r"^([a-zA-Z0-9_.-]+):", raw, re.M)
                        if not t.startswith(".")]
             targets = list(dict.fromkeys(targets))[:12]
@@ -1073,7 +1141,13 @@ def cmd_proj() -> None:
 
 def main() -> None:
     mode = sys.argv[1] if len(sys.argv) > 1 else "extract"
-    if mode == "proj":
+    if mode == "tty-choice":
+        cmd_tty_choice()
+    elif mode == "command-check":
+        raise SystemExit(0 if command_is_display_safe(sys.stdin.read()) else 1)
+    elif mode == "payload":
+        cmd_payload()
+    elif mode == "proj":
         cmd_proj()
     elif mode == "secrets-detect":
         cmd_secrets_detect()

@@ -12,9 +12,11 @@
 $ sl
 # → runs ls
 
-$ where is the com folder
+$ list all files
+AI request preview
+[y] send  [n] cancel
 …resolving
-→ find . -type d -iname "*com*"
+→ ls -la
 [Enter] run  ·  [e] edit  ·  [n] cancel
 ```
 
@@ -41,11 +43,11 @@ Every other terminal fixer makes you *ask* for help. That's the friction — you
 | Copilot CLI | `gh copilot suggest "..."` |
 | **dum-tum** | **you just type. Enter.** |
 
-dum-tum hooks `accept-line` — the moment you press Enter, before your shell rejects anything. Typos get fixed locally and instantly. Plain English gets routed to AI. Everything else runs exactly as it always did.
+dum-tum hooks `accept-line` — the moment you press Enter, before your shell rejects anything. Typos get fixed locally and instantly. Plain English that starts with an unknown command can be offered to AI. You review and approve the request before transmission. Everything else runs exactly as it always did.
 
 When an AI suggestion needs confirmation, Enter submits it through your shell's normal line editor, `e` leaves it in the buffer for editing, and `n` cancels it.
 
-The second difference: **it doesn't demand another API key.** If you already have `opencode`, `claude` (Claude Code), `codex`, or `agy` (Antigravity CLI) installed and logged in, dum-tum uses it. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
+The second difference: **it doesn't demand another API key.** Supported `opencode` and `claude` (Claude Code) versions can use your existing login. Codex and Antigravity are currently refused for lack of a verified no-tools boundary. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
 
 ---
 
@@ -80,7 +82,7 @@ Or without Node:
 curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 ```
 
-The installer detects your login shell, installs deps, finds `opencode`/`claude`/`codex`/`agy` on your PATH, lets you pick a provider and model, smoke-tests it, and writes your rc file. Then:
+The installer detects your login shell, installs deps, finds available CLI providers on your PATH, offers supported providers and models, smoke-tests it, and writes your rc file. Then:
 
 ```bash
 source ~/.zshrc   # or open a new tab
@@ -99,7 +101,6 @@ dum_tum_unload
 
 ```bash
 ./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
-./install.sh --yes --provider antigravity
 ./install.sh --yes --provider openrouter
 ./install.sh --yes --provider openai
 ./install.sh --yes --provider anthropic
@@ -110,7 +111,7 @@ dum_tum_unload
 
 For a key-based non-interactive install, provide only the environment variable matching the selected provider: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` (`GOOGLE_API_KEY` is also accepted for Gemini). The removed `--key` option is rejected because command-line values are exposed in shell history and process arguments. To enter a key without echoing it, omit `--yes` and run with the provider only, such as `./install.sh --provider openai`; the installer uses a hidden terminal prompt.
 
-`--skip-ai-test` prevents all provider CLI execution, live model discovery, authentication checks, and network smoke tests. The installer still verifies that a selected local CLI exists on `PATH`; a key-based provider without its matching key is disabled. Choosing `--provider none` performs no AI-provider or model-network activity.
+`--skip-ai-test` prevents all provider CLI execution, live model discovery, authentication checks, and network smoke tests. The installer still verifies that a selected local CLI exists on `PATH`; storing a legacy Codex or Antigravity choice does not enable it at runtime; a key-based provider without its matching key is disabled. Choosing `--provider none` performs no AI-provider or model-network activity.
 
 Requires `python3`, `curl`, and either zsh or Bash 4+.
 
@@ -128,18 +129,16 @@ This tool runs things in your shell. That deserves a straight answer about what 
 
 - **Only read-only commands auto-run.** `ls`, `cat`, `pwd` and friends. Everything else asks.
 - **AI output never auto-runs.** Ever. It always waits for Enter.
-- **Failed-command AI can be disabled.** Eligible failed `git`/`npm`/`docker` and similar commands are sent automatically when `FX_AI_ON_FAIL=1` and AI is configured. Set `FX_AI_ON_FAIL=0` if you only want explicit natural-language requests sent.
+- **Failed-command AI is off by default.** Set `FX_AI_ON_FAIL=1` to offer AI help for eligible failures. Every AI request shows the provider and exact JSON payload and requires a fresh `y` before transmission. The suggested command then needs a separate fresh Enter to run.
 - **Known secret shapes are blocked or redacted** before AI calls. This includes quoted or spaced secret assignments, password/token/API-key flags and labels, authorization and API-key headers, credentials embedded in URLs, and high-confidence provider-key formats such as `sk-…`, GitHub, AWS, Google, Slack, and GitLab tokens.
 - **Local mode is fully offline.** Nothing leaves your machine, period.
 - **Keys aren't passed as process arguments.** The installer accepts them through a hidden prompt or provider-specific environment variable, and HTTP credentials and request bodies reach `curl` through stdin rather than argv. As with any environment-based secret, another process with sufficient permission may still inspect the environment. Your rc file is `chmod 600` after install.
 
-Before sending a prompt to a local CLI backend, dum-tum checks that the installed version exposes the required confinement controls. OpenCode runs without external plugins and with inline deny-all tool and permission configuration; Claude runs in safe, plan mode with no tools or MCP servers; Codex ignores user configuration and rules and uses its read-only sandbox; Antigravity requests plan mode and its terminal sandbox from an isolated temporary workspace with slash-command expansion disabled. Some agy versions report that plan mode has no effect while slash commands are disabled; the terminal sandbox remains enabled, and this combination should not be treated as a guarantee that all model tools are disabled. If those controls cannot be verified, dum-tum refuses to invoke that provider. These are the CLIs' documented model-tool boundaries, not an operating-system sandbox around a malicious or compromised CLI executable, which still runs with your user permissions.
+Before sending a prompt to a local CLI backend, dum-tum requires controls that disable tools. OpenCode runs in an empty temporary directory without external plugins and with deny-all tool and permission configuration. Claude runs in an empty temporary directory in safe, plan mode with no tools or MCP servers. Installed versions without those controls are refused. Codex and Antigravity are currently refused because their sandbox or plan modes do not establish a complete no-tools boundary. Choose an HTTP provider, supported OpenCode, or supported Claude instead. These controls constrain model tools; the CLI executable itself remains trusted software with your user permissions.
 
-Antigravity readiness checks inspect CLI capabilities without sending a model prompt. Authentication and transport errors are reported by the actual AI request.
+OpenCode passes its prompt as a CLI argument, which may be visible to other local users in the process table. Claude sends its prompt through stdin.
 
-One honest caveat: with the `opencode`/`codex` providers, the prompt is passed as a CLI argument and is visible to other local users via `ps` for the duration of that call. The `claude` and `antigravity` providers send the prompt via stdin, so it is not `ps`-visible.
-
-What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detected package scripts or Make targets, up to 30 aliases, and the task or failed input. Failed commands matching a known secret pattern are not sent; matching values in other context are redacted. Detection is heuristic: novel, obfuscated, fragmented, or unlabeled secrets may not be recognized, and filenames, aliases, command arguments, and natural-language prompts can still be sensitive. Do not include secrets in data you allow AI mode to send.
+What AI mode sends: OS and shell, cwd, up to 20 directory names, bounded project script or Make target names, bounded aliases, and the task or failed input. Context is encoded as JSON data, and the exact redacted payload is shown before you approve sending it. Existing commands such as `find`, `open`, and `type` are left to the shell. Failed commands matching a known secret pattern are not sent; matching values in other context are redacted. Detection is heuristic: novel, obfuscated, fragmented, or unlabeled secrets may not be recognized, and filenames, aliases, command arguments, and natural-language prompts can still be sensitive. Do not include secrets in data you allow AI mode to send.
 
 ---
 
@@ -147,11 +146,11 @@ What AI mode sends: OS and shell, cwd, the first 20 entries from `ls -al`, detec
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `codex` · `antigravity` · `none` |
+| `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `none`; legacy `codex`/`antigravity` values are refused |
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
 | `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call and its descendants are killed |
-| `FX_AI_ON_FAIL` | `1` | automatically ask AI to suggest fixes for eligible failed commands |
+| `FX_AI_ON_FAIL` | `0` | offer AI help for eligible failures; requires request approval |
 | `OPENROUTER_API_KEY` | — | required only for `openrouter` |
 | `OPENAI_API_KEY` | — | required only for `openai` |
 | `ANTHROPIC_API_KEY` | — | required only for `anthropic` |
@@ -170,7 +169,7 @@ export FX_MODEL="anthropic/claude-sonnet-4"
 ```
 Enter pressed
     │
-    ├─ English sentence?           → AI → confirm
+    ├─ Unknown-command sentence?   → approve request → AI → confirm
     │
     ├─ Unknown command?
     │     multi-word English       → AI → confirm

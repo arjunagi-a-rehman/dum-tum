@@ -20,12 +20,8 @@ _fx_is_english_line() {
   [[ "$line" == *['|><;&$()`\\']* || "$line" == */* ]] && return 1
   local -a w; w=(${(z)line})
   (( $#w < 3 )) && return 1
-  # first word must be an English-collision command OR not a real command at all
   local head=$w[1]
-  if ! _fx_in_list "$head" "${_FX_EN_CMDS[@]}"; then
-    # real non-English command (git, npm, ls, …) → leave it alone
-    (( ${+commands[$head]} || ${+builtins[$head]} || ${+aliases[$head]} || ${+functions[$head]} )) && return 1
-  fi
+  (( ${+commands[$head]} || ${+builtins[$head]} || ${+aliases[$head]} || ${+functions[$head]} )) && return 1
   local a
   for a in $w; do
     [[ "$a" == -* || "$a" == *=* ]] && return 1
@@ -35,7 +31,6 @@ _fx_is_english_line() {
   return 0
 }
 
-# Intercept English sentences at Enter, before builtins like `where` run.
 _fx_accept_line() {
   local full="$BUFFER"
   if _fx_is_english_line "$full"; then

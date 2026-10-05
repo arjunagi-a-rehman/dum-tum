@@ -293,81 +293,12 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
-  mkdir -p emptybin
-  PATH="$TMPD/emptybin:/usr/bin:/bin"
-  check_rc "_fx_ai_ready antigravity missing binary" 1 _fx_ai_ready
+  check_rc "antigravity refuses model tools" 126 _fx_ai_antigravity list files
+  FX_PROVIDER=codex
+  check_rc "codex refuses model tools" 126 _fx_ai_codex list files
 )
 rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
-(
-  FX_PROVIDER=antigravity
-  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
-  mkdir -p bin
-  printf '%s\n' '#!/bin/sh' 'touch "$FX_TEST_READY_MARKER"' 'exit 1' > bin/agy
-  chmod +x bin/agy
-  PATH="$TMPD/bin:$PATH"
-  export FX_TEST_READY_MARKER="$TMPD/agy-ready-marker"
-  check_rc "_fx_ai_ready antigravity cached capabilities" 0 _fx_ai_ready
-  check_rc "_fx_ai_ready antigravity repeated readiness" 0 _fx_ai_ready
-  check_rc "_fx_ai_ready antigravity does not send a prompt" 0 test ! -e "$FX_TEST_READY_MARKER"
-)
-rc=$?
-if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
-(
-  FX_PROVIDER=antigravity
-  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=0
-  PATH="$TMPD/bin:$PATH"
-  check_rc "_fx_ai_ready antigravity unsupported controls" 1 _fx_ai_ready
-)
-rc=$?
-if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
-(
-  FX_PROVIDER=antigravity
-  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
-  printf '%s\n' '#!/bin/sh' 'printf "agy authentication failed\n" >&2' 'exit 17' > bin/agy
-  PATH="$TMPD/bin:$PATH"
-  out="$(_fx_ai_resolve test 2>&1 | _fx_strip_ctrl)"
-  check_eq "_fx_ai_resolve antigravity preserves authentication failure" \
-    $'…resolving\nagy authentication failed' "$out"
-)
-rc=$?
-if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
-(
-  FX_PROVIDER=antigravity
-  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
-  mkdir -p emptybin
-  PATH="$TMPD/emptybin:/usr/bin:/bin"
-  unset _FX_ANTIGRAVITY_READY
-  out="$(_fx_ai_resolve test 2>&1 | _fx_strip_ctrl)"
-  check_eq "_fx_ai_resolve antigravity missing binary error" '? agy not found on PATH' "$out"
-)
-rc=$?
-if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
-out=$(
-  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
-  printf '%s\n' '#!/usr/bin/env bash' \
-    '[[ "$PWD" != "$FX_TEST_ORIGINAL_CWD" ]] || exit 1' \
-    '[[ "$1" == "--input-format" && "$2" == "stream-json" ]] || exit 1' \
-    '[[ "$3" == "--output-format" && "$4" == "stream-json" ]] || exit 1' \
-    '[[ "$5" == "--sandbox" ]] || exit 1' \
-    '[[ "$6" == "--mode" && "$7" == "plan" ]] || exit 1' \
-    '[[ "$8" == "--disable-slash-commands" ]] || exit 1' \
-    '[[ "$9" == "--model" && "${10}" == "test-model" ]] || exit 1' \
-    '[[ "${11}" == "--effort" && "${12}" == "high" ]] || exit 1' \
-    '[[ "$#" == 12 ]] || exit 1' \
-    'IFS= read -r payload' \
-    '[[ "$payload" == *"Task/failed input: list files"* ]] || exit 1' \
-    "printf '%s\\n' '{\"event\":\"result\",\"result\":{\"status\":\"SUCCESS\",\"response\":\"ls -la\\n\"}}'" > bin/agy
-  chmod +x bin/agy
-  PATH="$TMPD/bin:$PATH"
-  export FX_TEST_ORIGINAL_CWD="$PWD"
-  FX_MODEL=test-model
-  FX_VARIANT=high
-  _fx_ai_antigravity list files
-)
-rc=$?
-if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
-check_eq "_fx_ai_antigravity stdin and isolation" 'ls -la' "$out"
 
 mkdir -p "$TMPD/install-home"
 rm -f "$TMPD/agy-installer-marker"

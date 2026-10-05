@@ -118,7 +118,7 @@ class InteractiveAdapterTest(unittest.TestCase):
     def start(self, argv, adapter):
         self.shell = ShellSession(argv, self.tempdir.name)
         self.shell.command(f"source '{ROOT / 'src' / adapter}'")
-        self.shell.command("_fx_ai_ready() { return 0; }")
+        self.shell.command("_fx_ai_ready() { return 0; }; _fx_confirm_ai_send() { return 0; }")
         self.shell.command("_fx_ai() { printf '%s\\n' \"$FX_TEST_SUGGESTION\"; }")
 
     def set_suggestion(self, command):
@@ -323,17 +323,18 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.assertNotIn("must-not-run", output)
 
     @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
-    def test_bash_ctrl_j_records_actual_failure(self):
+    def test_bash_ctrl_j_never_uses_stale_history(self):
         shell = shutil.which("bash")
         with tempfile.TemporaryDirectory() as tmp:
             session = ShellSession([shell, "--noprofile", "--norc", "-i"], tmp)
             try:
                 session.command(f"source {shlex.quote(str(ROOT / 'src/fixit.bash'))}; FX_AI_ON_FAIL=0; _fx_fix_failed_line() {{ :; }}")
-                session.command("true")
-                session.send("bash -c 'exit 42'\n")
+                session.command("HISTCONTROL=ignorespace; history -s 'cat dcoument.txt'")
+                session.send(" bash -c 'exit 42'\n")
                 session.read_until_idle(PROMPT)
                 output = session.command("printf 'CAPTURE:%s\\n' \"$_FX_LASTFAIL\"")
-                self.assertIn("CAPTURE:bash -c 'exit 42' (exit 42)", output)
+                self.assertNotIn("CAPTURE:cat dcoument.txt", output)
+                self.assertNotIn("bash -c 'exit 42' (exit 42)", output)
             finally:
                 session.close()
 
@@ -373,7 +374,7 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.shell = ShellSession([shutil.which("zsh"), "-f"], self.tempdir.name)
         self.shell.command(f"source {shlex.quote(str(ROOT / 'src/fixit.zsh'))}")
         self.shell.command(
-            "_fx_ai_ready() { return 0; }; "
+            "_fx_ai_ready() { return 0; }; _fx_confirm_ai_send() { return 0; }; "
             "_fx_ai() { print -u2 'Error: context canceled'; return 1; }"
         )
         self.shell.send("list all the files\r")
@@ -675,13 +676,16 @@ class InteractiveAdapterTest(unittest.TestCase):
         self.exercise_confirmation_flow(test_edit=False)
         marker = Path(self.tempdir.name) / "zsh_edit_deferred"
         command = (
-            "read() { key=e; return 0; }; "
+
             "_FX_ZLE_CONFIRM=1; _FX_ZLE_ACCEPT=0; _FX_ZLE_CMD=''; "
             f"_fx_confirm_run 'touch {marker}'; "
             "printf 'ZSH_EDIT_STATE=%s:%s\\n' \"$_FX_ZLE_ACCEPT\" \"$_FX_ZLE_CMD\"; "
-            "unfunction read; unset _FX_ZLE_CONFIRM _FX_ZLE_ACCEPT _FX_ZLE_CMD"
+            "unset _FX_ZLE_CONFIRM _FX_ZLE_ACCEPT _FX_ZLE_CMD"
         )
-        output = self.shell.command(command)
+        self.shell.send(command + "\r")
+        output = self.shell.read_until("[Enter] run  [e] edit  [n] cancel")
+        self.shell.send("e")
+        output += self.shell.read_until_idle(PROMPT)
         self.assertIn(f"ZSH_EDIT_STATE=0:touch {marker}", output)
         self.assertFalse(marker.exists())
 
