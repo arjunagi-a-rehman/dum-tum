@@ -263,42 +263,42 @@
               </div>
               <div class="install-stage-shell">
                 <div class="install-stage-top"><span>install.sh / walkthrough</span><span data-install-count aria-live="polite" aria-atomic="true">01 / 06</span></div>
-                <div id="install-panel-launch" class="install-stage" role="tabpanel" aria-labelledby="install-tab-launch" data-install-panel="launch">
+                <div id="install-panel-launch" class="install-stage" role="tabpanel" aria-labelledby="install-tab-launch" data-install-panel="launch" tabindex="0">
                   <span class="install-stage-kicker">01 / ENTRYPOINT</span>
                   <h4>The npm command starts Bash.</h4>
                   <p><code>npx</code> fetches the dum-tum package. Its small Node entrypoint runs the bundled <code>install.sh</code>.</p>
                   <div class="stage-console"><span><em>$</em> npx dum-tum@latest</span><span><em>→</em> npm package: dum-tum</span><span><em>→</em> bin/dum-tum.js → bash install.sh</span></div>
                   <p class="stage-detail">You can also run the Bash installer without Node. See the installation guide below.</p>
                 </div>
-                <div id="install-panel-check" class="install-stage" role="tabpanel" aria-labelledby="install-tab-check" data-install-panel="check" hidden>
+                <div id="install-panel-check" class="install-stage" role="tabpanel" aria-labelledby="install-tab-check" data-install-panel="check" tabindex="0" hidden>
                   <span class="install-stage-kicker">02 / PREFLIGHT</span>
                   <h4>It checks your shell and tools.</h4>
                   <p>The installer selects your login shell, checks its config file, and checks for Python 3, curl, and zsh when needed.</p>
                   <div class="stage-console"><span><em>✓</em> choose zsh, Bash, or both</span><span><em>✓</em> check existing shell config</span><span><em>?</em> install missing tools when supported</span></div>
                   <p class="stage-detail">If tools are missing, it can use Homebrew, apt, dnf, or pacman. The package manager may ask for permission or a sudo password.</p>
                 </div>
-                <div id="install-panel-files" class="install-stage" role="tabpanel" aria-labelledby="install-tab-files" data-install-panel="files" hidden>
+                <div id="install-panel-files" class="install-stage" role="tabpanel" aria-labelledby="install-tab-files" data-install-panel="files" tabindex="0" hidden>
                   <span class="install-stage-kicker">03 / RUNTIME</span>
                   <h4>It stages and checks the files.</h4>
                   <p>The installer copies the shell adapters and helper files to a temporary folder. It validates them before it moves them into the install folder.</p>
                   <div class="stage-console"><span><em>→</em> temporary install folder</span><span><em>├</em> shell adapters + shared helper</span><span><em>└</em> Python AI helper → validate</span></div>
                   <p class="stage-detail">The default install folder is <code>~/.local/share/fixit</code>. That internal folder name remains for compatibility.</p>
                 </div>
-                <div id="install-panel-provider" class="install-stage" role="tabpanel" aria-labelledby="install-tab-provider" data-install-panel="provider" hidden>
+                <div id="install-panel-provider" class="install-stage" role="tabpanel" aria-labelledby="install-tab-provider" data-install-panel="provider" tabindex="0" hidden>
                   <span class="install-stage-kicker">04 / OPTIONS</span>
                   <h4>You choose how AI works.</h4>
                   <p>The installer looks for supported AI CLIs. You can pick one, use an API provider, or choose <code>none</code> for local typo fixes only.</p>
                   <div class="stage-console"><span><em>?</em> provider: CLI / API / none</span><span><em>?</em> model: provider default or your choice</span><span><em>✓</em> optional provider smoke test</span></div>
                   <p class="stage-detail">API keys use a hidden prompt. A key you enter can be saved in your shell config, which the installer protects with file mode 600.</p>
                 </div>
-                <div id="install-panel-connect" class="install-stage" role="tabpanel" aria-labelledby="install-tab-connect" data-install-panel="connect" hidden>
+                <div id="install-panel-connect" class="install-stage" role="tabpanel" aria-labelledby="install-tab-connect" data-install-panel="connect" tabindex="0" hidden>
                   <span class="install-stage-kicker">05 / SHELL CONFIG</span>
-                  <h4>It adds one managed config block.</h4>
-                  <p>The installer installs the staged files and adds a block that loads the adapter in <code>~/.zshrc</code> or <code>~/.bashrc</code>.</p>
-                  <div class="stage-console"><span><em>→</em> ~/.local/share/fixit/</span><span><em>→</em> ~/.zshrc or ~/.bashrc</span><span><em>✓</em> source adapter + provider settings</span></div>
-                  <p class="stage-detail">On an update, it replaces the existing managed block. If activation fails, it attempts to restore the previous files.</p>
+                  <h4>It updates the selected shell files.</h4>
+                  <p>The installer installs the staged files and adds a managed block to <code>~/.zshrc</code>, <code>~/.bashrc</code>, or both. On macOS, Bash may also need a loader in a login profile.</p>
+                  <div class="stage-console"><span><em>→</em> ~/.local/share/fixit/</span><span><em>→</em> ~/.zshrc and/or ~/.bashrc</span><span><em>↳</em> macOS Bash: login profile if needed</span><span><em>✓</em> adapter + provider settings</span></div>
+                  <p class="stage-detail">On an update, it replaces existing managed blocks. If activation fails, it attempts to restore the previous files.</p>
                 </div>
-                <div id="install-panel-reload" class="install-stage" role="tabpanel" aria-labelledby="install-tab-reload" data-install-panel="reload" hidden>
+                <div id="install-panel-reload" class="install-stage" role="tabpanel" aria-labelledby="install-tab-reload" data-install-panel="reload" tabindex="0" hidden>
                   <span class="install-stage-kicker">06 / ACTIVATE</span>
                   <h4>Reload your shell and try it.</h4>
                   <p>Open a new terminal tab or source the config file shown by the installer. Then the hook can see what you enter.</p>

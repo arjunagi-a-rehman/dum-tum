@@ -184,6 +184,7 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
 .install-stage-top { display: flex; justify-content: space-between; gap: 15px; padding: 15px 21px; border-bottom: 1px solid #426144; color: #8caa91; font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
 .install-stage-top span:last-child { color: var(--green); }
 .install-stage { flex: 1; padding: 34px clamp(24px, 4vw, 58px) 20px; }
+.install-stage:focus-visible { outline: 2px solid var(--green); outline-offset: -4px; }
 .install-stage-kicker { color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .install-stage h4 { max-width: 520px; margin: 17px 0 16px; font-size: clamp(1.45rem, 2.6vw, 2.3rem); line-height: 1.18; letter-spacing: -.07em; }
 .install-stage > p { max-width: 570px; margin-bottom: 22px; color: #bfcec1; font-size: 12px; line-height: 1.75; }

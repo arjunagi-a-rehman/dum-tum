@@ -113,9 +113,9 @@ function selectInstallStep(index, moveFocus = false) {
 for (const [index, tab] of installTabs.entries()) {
   tab.addEventListener("click", () => selectInstallStep(index));
   tab.addEventListener("keydown", (event) => {
-    const next = event.key === "ArrowRight" || event.key === "ArrowDown"
+    const next = event.key === (installMobile.matches ? "ArrowRight" : "ArrowDown")
       ? (index + 1) % installTabs.length
-      : event.key === "ArrowLeft" || event.key === "ArrowUp"
+      : event.key === (installMobile.matches ? "ArrowLeft" : "ArrowUp")
         ? (index - 1 + installTabs.length) % installTabs.length
         : event.key === "Home"
           ? 0

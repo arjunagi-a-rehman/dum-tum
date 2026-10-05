@@ -14,7 +14,7 @@ License: MIT
 2. The installer selects zsh, Bash, or both. It checks the shell config and required tools: Python 3, curl, and zsh when selected. It can install missing tools with a supported package manager.
 3. It stages and validates the runtime files before putting them in `~/.local/share/fixit` by default.
 4. It detects supported AI CLIs. The user can choose a CLI, an API provider, or `none` for local typo handling. It can test the selected AI provider.
-5. It adds or replaces a managed block in `~/.zshrc` or `~/.bashrc` to load the shell adapter and provider settings.
+5. It adds or replaces a managed block in `~/.zshrc`, `~/.bashrc`, or both, based on the selected shells. On macOS, Bash setup may also add a loader to a login profile. The blocks load the shell adapter and provider settings.
 6. The user opens a new terminal tab or sources the shell config to activate the hook.
 
 ## Behavior
