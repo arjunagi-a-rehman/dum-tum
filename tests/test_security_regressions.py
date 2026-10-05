@@ -64,6 +64,42 @@ class SecurityRegressionTest(unittest.TestCase):
         self.assertIn(b"\\x1b[8m", result.stderr)
         self.assertIn(b"\\x9b", result.stderr)
 
+    def test_terminal_eof_declines_execution_and_editor_confirmation(self):
+        shells = [(shutil.which("bash"), ["--noprofile", "--norc", "-i"]),
+                  (shutil.which("zsh"), ["-f", "-i"])]
+        for shell, arguments in shells:
+            if not shell:
+                continue
+            for mode in ("direct", "zle", "readline"):
+                with self.subTest(shell=shell, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    Path(tmp, "sitecustomize.py").write_text(
+                        "import os, sys\n"
+                        "if sys.argv[1:] == ['tty-choice']:\n"
+                        "    os.read = lambda fd, count: b''\n"
+                    )
+                    marker = Path(tmp, "executed")
+                    session = ShellSession([shell, *arguments], tmp)
+                    try:
+                        session.command(f"source {shlex.quote(str(ROOT / 'src/fixit-common.sh'))}")
+                        session.command(f"export PYTHONPATH={shlex.quote(tmp)}")
+                        session.command("_FX_ZLE_CONFIRM=0; _FX_READLINE_CONFIRM=0; "
+                                        "_FX_ZLE_ACCEPT=0; _FX_READLINE_ACCEPT=0")
+                        if mode == "zle":
+                            session.command("_FX_ZLE_CONFIRM=1")
+                        elif mode == "readline":
+                            session.command("_FX_READLINE_CONFIRM=1")
+                        output = session.command(
+                            f"_fx_confirm_run {shlex.quote('touch ' + str(marker))}; "
+                            "printf 'EOF_STATUS=%s ZLE=%s READLINE=%s\\n' "
+                            '"$?" "$_FX_ZLE_ACCEPT" "$_FX_READLINE_ACCEPT"'
+                        )
+                        self.assertIn("[Enter] run  [e] edit  [n] cancel", output)
+                        self.assertIn("EOF_STATUS=1 ZLE=0 READLINE=0", output)
+                        self.assertFalse(marker.exists(), output)
+                        self.assertIn("TERMINAL_RESTORED", session.command("printf TERMINAL_RESTORED"))
+                    finally:
+                        session.close()
+
     def test_upgrade_normalizes_writable_installation_directory(self):
         fixture = test_installer.InstallerKeyHandlingTest()
         fixture.setUp()

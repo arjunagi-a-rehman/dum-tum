@@ -419,6 +419,8 @@ def cmd_tty_choice() -> None:
         os.write(fd, b"\x1b[0m" + message.encode())
         choice = os.read(fd, 1)
         os.write(fd, b"\n")
+        if not choice:
+            raise SystemExit(1)
         sys.stdout.write(choice.decode(errors="replace"))
     finally:
         termios.tcsetattr(fd, termios.TCSAFLUSH, original)
