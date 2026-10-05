@@ -66,3 +66,76 @@ for (const tab of demoTabs) {
     }
   });
 }
+
+const installTabs = [...document.querySelectorAll("[data-install-tab]")];
+const installPanels = [...document.querySelectorAll("[data-install-panel]")];
+const installCount = document.querySelector("[data-install-count]");
+const installPrevious = document.querySelector("[data-install-prev]");
+const installNext = document.querySelector("[data-install-next]");
+const installTabList = document.querySelector(".install-step-list");
+const installMobile = window.matchMedia("(max-width: 700px)");
+
+function setInstallOrientation() {
+  installTabList.setAttribute("aria-orientation", installMobile.matches ? "horizontal" : "vertical");
+  if (installMobile.matches) {
+    const selected = installTabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+    centerInstallTab(selected);
+  }
+}
+
+function centerInstallTab(index) {
+  installTabList.scrollLeft += installTabs[index].getBoundingClientRect().left
+    - installTabList.getBoundingClientRect().left
+    - (installTabList.clientWidth - installTabs[index].clientWidth) / 2;
+}
+
+setInstallOrientation();
+installMobile.addEventListener("change", setInstallOrientation);
+
+function selectInstallStep(index, moveFocus = false) {
+  for (const [position, tab] of installTabs.entries()) {
+    const active = position === index;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+
+  for (const panel of installPanels) {
+    panel.hidden = panel.dataset.installPanel !== installTabs[index].dataset.installTab;
+  }
+
+  installCount.textContent = `${String(index + 1).padStart(2, "0")} / ${String(installTabs.length).padStart(2, "0")}`;
+  installPrevious.disabled = index === 0;
+  installNext.disabled = index === installTabs.length - 1;
+  if (moveFocus) installTabs[index].focus();
+  if (installMobile.matches) centerInstallTab(index);
+}
+
+for (const [index, tab] of installTabs.entries()) {
+  tab.addEventListener("click", () => selectInstallStep(index));
+  tab.addEventListener("keydown", (event) => {
+    const next = event.key === (installMobile.matches ? "ArrowRight" : "ArrowDown")
+      ? (index + 1) % installTabs.length
+      : event.key === (installMobile.matches ? "ArrowLeft" : "ArrowUp")
+        ? (index - 1 + installTabs.length) % installTabs.length
+        : event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? installTabs.length - 1
+            : -1;
+
+    if (next >= 0) {
+      event.preventDefault();
+      selectInstallStep(next, true);
+    }
+  });
+}
+
+installPrevious.addEventListener("click", () => {
+  const current = installTabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+  selectInstallStep(current - 1);
+});
+
+installNext.addEventListener("click", () => {
+  const current = installTabs.findIndex((tab) => tab.getAttribute("aria-selected") === "true");
+  selectInstallStep(current + 1);
+});

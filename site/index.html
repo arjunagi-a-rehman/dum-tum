@@ -138,9 +138,16 @@
           <div class="section-lead">
             <div>
               <p class="section-index">/ 01 — how it works</p>
-              <h2 id="workflow-title">An Enter hook.<br>Three paths.</h2>
+              <h2 id="workflow-title">An Enter hook.<br>Four paths.</h2>
             </div>
-            <p>dum-tum checks the line you submitted and handles it before the shell reports an unknown command.</p>
+            <p>The shell hook checks what you type. With AI enabled, dum-tum can also suggest a fix after an eligible command fails.</p>
+          </div>
+          <div class="hook-sequence" aria-label="Command flow">
+            <div><span>input</span><strong>You press Enter</strong><p>The normal shell line reaches the hook.</p></div>
+            <span class="sequence-arrow" aria-hidden="true">→</span>
+            <div><span>check</span><strong>dum-tum classifies it</strong><p>Known command, likely typo, or plain English.</p></div>
+            <span class="sequence-arrow" aria-hidden="true">→</span>
+            <div><span>result</span><strong>Run or review</strong><p>The shell runs it, or you review a suggestion.</p></div>
           </div>
           <ol class="flow-list">
             <li>
@@ -156,6 +163,11 @@
             <li>
               <span class="flow-number">03 <span aria-hidden="true">└─</span></span>
               <div><h3>It is plain English</h3><p>With AI enabled, dum-tum proposes a command. You choose to run, edit, or cancel it.</p></div>
+              <span class="flow-status">AI / confirm</span>
+            </li>
+            <li>
+              <span class="flow-number">04 <span aria-hidden="true">└─</span></span>
+              <div><h3>A command fails</h3><p>With AI configured, eligible failures can be sent for a suggested fix by default. Set <code>FX_AI_ON_FAIL=0</code> to disable those automatic requests. A suggested command still needs your confirmation.</p></div>
               <span class="flow-status">AI / confirm</span>
             </li>
           </ol>
@@ -222,7 +234,7 @@
               <p class="section-index">/ 05 — install</p>
               <h2 id="install-title">Ready at your prompt.</h2>
             </div>
-            <p>Run the installer, choose a provider, then start typing in your normal shell.</p>
+            <p>Run one command. The installer checks your system, sets up the shell hook, and tells you how to activate it.</p>
           </div>
           <div class="install-terminal">
             <div class="install-top"><span>terminal / install</span><span>macOS + Linux</span></div>
@@ -231,6 +243,71 @@
               <button class="copy-button" type="button" data-copy="npx dum-tum@latest" aria-label="Copy install command">[ copy ]</button>
             </div>
             <div class="install-bottom"><span>Requires Python 3, curl, and zsh 5+ or Bash 4+ for the full Enter hook.</span><span>npm · MIT</span></div>
+          </div>
+          <div class="install-guide" aria-labelledby="install-guide-title">
+            <div class="install-guide-heading">
+              <div>
+                <p class="section-index">/ installation walkthrough</p>
+                <h3 id="install-guide-title">What happens after Enter?</h3>
+              </div>
+              <p>Explore the steps below. This is a preview; it does not run the installer.</p>
+            </div>
+            <div class="install-guide-layout">
+              <div class="install-step-list" role="tablist" aria-label="Installation steps" aria-orientation="vertical">
+                <button id="install-tab-launch" type="button" role="tab" aria-selected="true" aria-controls="install-panel-launch" tabindex="0" data-install-tab="launch"><span class="step-index">01</span><span><strong>Start the installer</strong><small>npm package → Bash script</small></span><span class="step-marker" aria-hidden="true">↗</span></button>
+                <button id="install-tab-check" type="button" role="tab" aria-selected="false" aria-controls="install-panel-check" tabindex="-1" data-install-tab="check"><span class="step-index">02</span><span><strong>Check your system</strong><small>Shell, config, dependencies</small></span><span class="step-marker" aria-hidden="true">↗</span></button>
+                <button id="install-tab-files" type="button" role="tab" aria-selected="false" aria-controls="install-panel-files" tabindex="-1" data-install-tab="files"><span class="step-index">03</span><span><strong>Stage the runtime</strong><small>Copy and validate files</small></span><span class="step-marker" aria-hidden="true">↗</span></button>
+                <button id="install-tab-provider" type="button" role="tab" aria-selected="false" aria-controls="install-panel-provider" tabindex="-1" data-install-tab="provider"><span class="step-index">04</span><span><strong>Choose AI or local only</strong><small>Provider, model, optional test</small></span><span class="step-marker" aria-hidden="true">↗</span></button>
+                <button id="install-tab-connect" type="button" role="tab" aria-selected="false" aria-controls="install-panel-connect" tabindex="-1" data-install-tab="connect"><span class="step-index">05</span><span><strong>Connect your shell</strong><small>Update the shell config</small></span><span class="step-marker" aria-hidden="true">↗</span></button>
+                <button id="install-tab-reload" type="button" role="tab" aria-selected="false" aria-controls="install-panel-reload" tabindex="-1" data-install-tab="reload"><span class="step-index">06</span><span><strong>Reload and try it</strong><small>Activate the hook</small></span><span class="step-marker" aria-hidden="true">↗</span></button>
+              </div>
+              <div class="install-stage-shell">
+                <div class="install-stage-top"><span>install.sh / walkthrough</span><span data-install-count aria-live="polite" aria-atomic="true">01 / 06</span></div>
+                <div id="install-panel-launch" class="install-stage" role="tabpanel" aria-labelledby="install-tab-launch" data-install-panel="launch" tabindex="0">
+                  <span class="install-stage-kicker">01 / ENTRYPOINT</span>
+                  <h4>The npm command starts Bash.</h4>
+                  <p><code>npx</code> fetches the dum-tum package. Its small Node entrypoint runs the bundled <code>install.sh</code>.</p>
+                  <div class="stage-console"><span><em>$</em> npx dum-tum@latest</span><span><em>→</em> npm package: dum-tum</span><span><em>→</em> bin/dum-tum.js → bash install.sh</span></div>
+                  <p class="stage-detail">You can also run the Bash installer without Node. See the installation guide below.</p>
+                </div>
+                <div id="install-panel-check" class="install-stage" role="tabpanel" aria-labelledby="install-tab-check" data-install-panel="check" tabindex="0" hidden>
+                  <span class="install-stage-kicker">02 / PREFLIGHT</span>
+                  <h4>It checks your shell and tools.</h4>
+                  <p>The installer selects your login shell, checks its config file, and checks for Python 3, curl, and zsh when needed.</p>
+                  <div class="stage-console"><span><em>✓</em> choose zsh, Bash, or both</span><span><em>✓</em> check existing shell config</span><span><em>?</em> install missing tools when supported</span></div>
+                  <p class="stage-detail">If tools are missing, it can use Homebrew, apt, dnf, or pacman. The package manager may ask for permission or a sudo password.</p>
+                </div>
+                <div id="install-panel-files" class="install-stage" role="tabpanel" aria-labelledby="install-tab-files" data-install-panel="files" tabindex="0" hidden>
+                  <span class="install-stage-kicker">03 / RUNTIME</span>
+                  <h4>It stages and checks the files.</h4>
+                  <p>The installer copies the shell adapters and helper files to a temporary folder. It validates them before it moves them into the install folder.</p>
+                  <div class="stage-console"><span><em>→</em> temporary install folder</span><span><em>├</em> shell adapters + shared helper</span><span><em>└</em> Python AI helper → validate</span></div>
+                  <p class="stage-detail">The default install folder is <code>~/.local/share/fixit</code>. That internal folder name remains for compatibility.</p>
+                </div>
+                <div id="install-panel-provider" class="install-stage" role="tabpanel" aria-labelledby="install-tab-provider" data-install-panel="provider" tabindex="0" hidden>
+                  <span class="install-stage-kicker">04 / OPTIONS</span>
+                  <h4>You choose how AI works.</h4>
+                  <p>The installer looks for supported AI CLIs. You can pick one, use an API provider, or choose <code>none</code> for local typo fixes only.</p>
+                  <div class="stage-console"><span><em>?</em> provider: CLI / API / none</span><span><em>?</em> model: provider default or your choice</span><span><em>✓</em> optional provider smoke test</span></div>
+                  <p class="stage-detail">API keys use a hidden prompt. A key you enter can be saved in your shell config, which the installer protects with file mode 600.</p>
+                </div>
+                <div id="install-panel-connect" class="install-stage" role="tabpanel" aria-labelledby="install-tab-connect" data-install-panel="connect" tabindex="0" hidden>
+                  <span class="install-stage-kicker">05 / SHELL CONFIG</span>
+                  <h4>It updates the selected shell files.</h4>
+                  <p>The installer installs the staged files and adds a managed block to <code>~/.zshrc</code>, <code>~/.bashrc</code>, or both. On macOS, Bash may also need a loader in a login profile.</p>
+                  <div class="stage-console"><span><em>→</em> ~/.local/share/fixit/</span><span><em>→</em> ~/.zshrc and/or ~/.bashrc</span><span><em>↳</em> macOS Bash: login profile if needed</span><span><em>✓</em> adapter + provider settings</span></div>
+                  <p class="stage-detail">On an update, it replaces existing managed blocks. If activation fails, it attempts to restore the previous files.</p>
+                </div>
+                <div id="install-panel-reload" class="install-stage" role="tabpanel" aria-labelledby="install-tab-reload" data-install-panel="reload" tabindex="0" hidden>
+                  <span class="install-stage-kicker">06 / ACTIVATE</span>
+                  <h4>Reload your shell and try it.</h4>
+                  <p>Open a new terminal tab or source the config file shown by the installer. Then the hook can see what you enter.</p>
+                  <div class="stage-console"><span><em>$</em> source ~/.zshrc</span><span><em>$</em> sl <span class="stage-annotation">→ local correction</span></span><span><em>$</em> list all files <span class="stage-annotation">→ AI suggestion if enabled</span></span></div>
+                  <p class="stage-detail">If you chose Bash, source <code>~/.bashrc</code> instead. AI suggestions always wait for you to run, edit, or cancel them.</p>
+                </div>
+                <div class="install-stage-controls"><button type="button" data-install-prev disabled>← Previous</button><button type="button" data-install-next>Next step →</button></div>
+              </div>
+            </div>
           </div>
           <div class="install-links">
             <a href="https://github.com/arjunagi-a-rehman/dum-tum#install-or-update" target="_blank" rel="noopener noreferrer">Installation guide ↗</a>
