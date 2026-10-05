@@ -54,6 +54,19 @@ class SecurityRegressionTest(unittest.TestCase):
             self.assertEqual(parsed["untrusted_context"]["project"], ["package.json scripts: build"])
             self.assertEqual(len(result.stdout.splitlines()), 1)
 
+    def test_large_alias_sets_are_bounded_before_payload_execution(self):
+        for shell in filter(None, (shutil.which("bash"), shutil.which("zsh"))):
+            with self.subTest(shell=shell):
+                script = (f"source {shlex.quote(str(ROOT / 'src/fixit-common.sh'))}; "
+                          "set -e; set -o pipefail; "
+                          "alias() { printf '%260000s' '' | tr ' ' A; }; "
+                          "_fx_ai_user_payload 'list files'")
+                result = subprocess.run([shell, "-c", script], capture_output=True,
+                                        text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertEqual(payload["untrusted_context"]["aliases"], "A" * 3000)
+
     def test_provider_stderr_cannot_change_terminal_state(self):
         child = "import sys; sys.stderr.buffer.write(b'\\x1b[8mconcealed\\r\\xc2\\x9b')"
         result = subprocess.run(["python3", str(ROOT / "src/fixit-ai.py"), "timeout", "2",

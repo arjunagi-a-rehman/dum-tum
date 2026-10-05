@@ -1558,6 +1558,7 @@ test_ai() {
     FX_AI_TIMEOUT=100 \
     python3 "$runtime_dir/fixit-ai.py" timeout 120 "$test_shell" -c '
       source "$1"
+      _FX_APPROVED_PAYLOAD="{\"task\":\"print only this exact shell command on one line: ls -la\",\"untrusted_context\":{}}"
       _fx_ai "print only this exact shell command on one line: ls -la"
     ' "$test_shell" "$test_file"
   ) >"$tmpout"

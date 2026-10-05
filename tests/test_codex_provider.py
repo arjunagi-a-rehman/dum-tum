@@ -20,7 +20,7 @@ class AgentProviderRefusalTest(unittest.TestCase):
                 path.chmod(0o755)
             env = os.environ.copy()
             env.update(PATH=tmp + os.pathsep + env["PATH"], REVIEW_MARKER=str(marker))
-            for shell in (shutil.which("bash"), shutil.which("zsh")):
+            for shell in filter(None, (shutil.which("bash"), shutil.which("zsh"))):
                 for provider in ("codex", "antigravity"):
                     for entry in (f"_fx_ai_{provider} task", "_fx_ai_resolve task"):
                         with self.subTest(shell=shell, provider=provider, entry=entry):

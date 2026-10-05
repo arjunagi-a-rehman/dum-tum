@@ -82,7 +82,7 @@ Or without Node:
 curl -fsSL https://raw.githubusercontent.com/arjunagi-a-rehman/dum-tum/main/install.sh | bash
 ```
 
-The installer detects your login shell, installs deps, finds available CLI providers on your PATH, offers supported providers and models, smoke-tests it, and writes your rc file. Then:
+The installer detects your login shell, installs deps, finds available CLI providers on your PATH, offers supported providers and models, smoke-tests it, and writes your rc file. The network smoke test sends only a fixed diagnostic task, with no local context. Then:
 
 ```bash
 source ~/.zshrc   # or open a new tab
@@ -129,7 +129,7 @@ This tool runs things in your shell. That deserves a straight answer about what 
 
 - **Only read-only commands auto-run.** `ls`, `cat`, `pwd` and friends. Everything else asks.
 - **AI output never auto-runs.** Ever. It always waits for Enter.
-- **Failed-command AI is off by default.** Set `FX_AI_ON_FAIL=1` to offer AI help for eligible failures. Every AI request shows the provider and exact JSON payload and requires a fresh `y` before transmission. The suggested command then needs a separate fresh Enter to run.
+- **Failed-command AI is off by default.** Set `FX_AI_ON_FAIL=1` to offer AI help for eligible failures. Every shell AI request shows the provider and exact JSON payload and requires a fresh `y` before transmission. The suggested command then needs a separate fresh Enter to run.
 - **Known secret shapes are blocked or redacted** before AI calls. This includes quoted or spaced secret assignments, password/token/API-key flags and labels, authorization and API-key headers, credentials embedded in URLs, and high-confidence provider-key formats such as `sk-…`, GitHub, AWS, Google, Slack, and GitLab tokens.
 - **Local mode is fully offline.** Nothing leaves your machine, period.
 - **Keys aren't passed as process arguments.** The installer accepts them through a hidden prompt or provider-specific environment variable, and HTTP credentials and request bodies reach `curl` through stdin rather than argv. As with any environment-based secret, another process with sufficient permission may still inspect the environment. Your rc file is `chmod 600` after install.

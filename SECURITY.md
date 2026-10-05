@@ -24,7 +24,7 @@ exec zsh          # or: exec bash
 - Known secret shapes are redacted, but no redaction system is complete.
 - API keys and HTTP bodies are sent to curl through stdin or files rather than command arguments.
 - Prompts passed to some local CLI providers may be visible to other local users in the process table while the provider runs.
-- Every AI request requires approval of the displayed provider and redacted JSON payload before transmission. Failed-command AI is off by default.
+- Every shell AI request requires approval of the displayed provider and redacted JSON payload before transmission. Failed-command AI is off by default. Installer smoke tests send only a fixed diagnostic task, with no local context.
 - AI suggestions require fresh confirmation before execution. Queued input, terminal controls, and active history event designators cannot authorize a different command.
 - CLI providers require no-tools controls and run in an empty temporary directory. Codex and Antigravity are currently refused because their sandbox modes do not establish a complete no-tools boundary.
 

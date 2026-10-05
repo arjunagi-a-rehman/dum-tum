@@ -302,7 +302,9 @@ _fx_ai_user_payload() {
     printf '%s' "$_FX_APPROVED_PAYLOAD"
     return
   fi
-  FX_TASK="$*" FX_SHELL_NAME="$(_fx_shell_name)" FX_ALIAS_HINTS="$(alias 2>/dev/null)" \
+  local hints
+  hints="$(alias 2>/dev/null)"
+  FX_TASK="$*" FX_SHELL_NAME="$(_fx_shell_name)" FX_ALIAS_HINTS="${hints:0:3000}" \
     python3 "$_FX_AI_PY" payload
 }
 
