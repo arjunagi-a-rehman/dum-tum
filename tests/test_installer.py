@@ -1,3 +1,4 @@
+import json
 import os
 import pty
 import select
@@ -282,6 +283,43 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
         self.assertNotIn("OPENAI_API_KEY=", child_args)
         self.assertEqual(env_log.read_text(), f"openai={marker}\nopenrouter=unset\n")
 
+    def test_smoke_request_contains_only_fixed_diagnostic_task(self):
+        fake_bin = self.base / "http-bin"
+        fake_bin.mkdir()
+        request_log = self.base / "request.json"
+        fake_curl = fake_bin / "curl"
+        fake_curl.write_text(
+            "#!/bin/sh\n"
+            "while [ \"$#\" -gt 0 ]; do\n"
+            "  if [ \"$1\" = --data-binary ]; then\n"
+            "    shift\n"
+            "    cat \"${1#@}\" > \"$DUM_TUM_REQUEST_LOG\"\n"
+            "  fi\n"
+            "  shift\n"
+            "done\n"
+            "cat >/dev/null\n"
+            "printf '%s\\n' '{\"choices\":[{\"message\":{\"content\":\"ls -la\"}}]}'\n"
+        )
+        fake_curl.chmod(0o755)
+        context = self.base / "private-context"
+        context.mkdir()
+        (context / "confidential-customer-records").touch()
+        (context / "package.json").write_text('{"scripts":{"private-deploy":"secret"}}')
+        result = subprocess.run(
+            ["/bin/bash", str(INSTALLER), "--yes", "--skip-deps", "--provider", "openai",
+             "--model", "test-model", "--shell", "bash"],
+            cwd=context, env=self.env(PATH=f"{fake_bin}:/usr/bin:/bin", SHELL="/bin/bash",
+                                     OPENAI_API_KEY="test-key", DUM_TUM_REQUEST_LOG=str(request_log)),
+            text=True, capture_output=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        request = json.loads(request_log.read_text())
+        payload = json.loads(next(message["content"] for message in request["messages"]
+                                  if message["role"] == "user"))
+        self.assertEqual(payload, {"task": "print only this exact shell command on one line: ls -la",
+                                   "untrusted_context": {}})
+        self.assertIn("AI test OK", result.stdout)
+
     def test_interactive_key_prompt_does_not_echo(self):
         marker = "hidden-prompt-secret-sentinel"
         pid, fd = pty.fork()
@@ -417,8 +455,6 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
         provider_to_command = {
             "opencode": "opencode",
             "claude": "claude",
-            "codex": "codex",
-            "antigravity": "agy",
         }
         for provider, selected_command in provider_to_command.items():
             with self.subTest(provider=provider):

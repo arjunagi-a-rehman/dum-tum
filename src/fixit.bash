@@ -160,12 +160,7 @@ if [[ $- == *i* ]]; then
   _fx_prompt_hook() {
     local rc=$?
     if [[ "${_FX_BASH_READLINE_CAPTURED:-0}" != 1 ]]; then
-      local last_history
-      last_history="$(HISTTIMEFORMAT='' builtin history 1)"
-      last_history="${last_history#"${last_history%%[![:space:]]*}"}"
-      last_history="${last_history#*[[:space:]]}"
-      last_history="${last_history#"${last_history%%[![:space:]]*}"}"
-      [[ -z "$last_history" ]] || _fx_preexec "$last_history"
+      _FX_LAST=""
     fi
     _FX_BASH_READLINE_CAPTURED=0
     _fx_precmd "$rc"
@@ -208,9 +203,7 @@ if [[ $- == *i* ]]; then
       read -ra w <<< "$line"
       (( ${#w[@]} < 3 )) && return 1
       local head="${w[0]}"
-      if ! _fx_in_list "$head" "${_FX_EN_CMDS[@]}"; then
-        type -t "$head" >/dev/null 2>&1 && return 1
-      fi
+      type -t "$head" >/dev/null 2>&1 && return 1
       local a
       for a in "${w[@]}"; do
         [[ "$a" == -* || "$a" == *=* ]] && return 1

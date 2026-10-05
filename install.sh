@@ -928,6 +928,7 @@ stage_runtime() {
   TX_STAGE="$(mktemp -d "$parent/.dum-tum-install.XXXXXX")" || return 1
   if [[ -d "$INSTALL_DIR" ]]; then
     cp -pR "$INSTALL_DIR/." "$TX_STAGE/" || return 1
+    chmod 700 "$TX_STAGE" || return 1
     for f in fixit-common.sh fixit.zsh fixit.bash fixit-ai.py "$INSTALL_SENTINEL"; do
       rm -f "$TX_STAGE/$f" || return 1
     done
@@ -1065,10 +1066,6 @@ select_provider() {
       PROVIDER="opencode"
     elif [[ "$HAVE_CLAUDE" -eq 1 ]]; then
       PROVIDER="claude"
-    elif [[ "$HAVE_CODEX" -eq 1 ]]; then
-      PROVIDER="codex"
-    elif [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
-      PROVIDER="antigravity"
     else
       PROVIDER="none"
       warn "No AI provider selected (non-interactive) — local typo fixes only."
@@ -1098,18 +1095,6 @@ select_provider() {
     [[ "$hint" == "claude" ]] && default=$i
     i=$((i+1))
   fi
-  if [[ "$HAVE_CODEX" -eq 1 ]]; then
-    printf "  [%d] Codex CLI (uses your local codex auth)\n" "$i"
-    labels+=("Codex CLI"); values+=("codex")
-    [[ "$hint" == "codex" ]] && default=$i
-    i=$((i+1))
-  fi
-  if [[ "$HAVE_ANTIGRAVITY" -eq 1 ]]; then
-    printf "  [%d] Antigravity CLI (uses your local agy auth)\n" "$i"
-    labels+=("Antigravity CLI"); values+=("antigravity")
-    [[ "$hint" == "antigravity" ]] && default=$i
-    i=$((i+1))
-  fi
   printf "  [%d] OpenRouter API key\n" "$i"
   labels+=("OpenRouter"); values+=("openrouter")
   [[ "$hint" == "openrouter" ]] && default=$i
@@ -1130,8 +1115,8 @@ select_provider() {
   labels+=("Skip"); values+=("none")
   [[ "$hint" == "none" ]] && default=$i
 
-  if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CLAUDE" -eq 0 && "$HAVE_CODEX" -eq 0 && "$HAVE_ANTIGRAVITY" -eq 0 ]]; then
-    echo "  (tip: install opencode, claude, codex, or Antigravity CLI, then re-run to use them)"
+  if [[ "$HAVE_OPENCODE" -eq 0 && "$HAVE_CLAUDE" -eq 0 ]]; then
+    echo "  (tip: supported opencode or claude versions can use your existing login)"
   fi
   [[ -n "$hint" ]] && echo "  (current shell/env default: $hint)"
 
@@ -1559,8 +1544,7 @@ test_ai() {
     test_file="$runtime_dir/fixit.bash"
   fi
   set +e
-  # background + watchdog: CLI backends can queue for a long time
-  local tmpout pid waited=0 limit=120
+  local tmpout
   tmpout="$(mktemp)"
   (
     unset OPENROUTER_API_KEY OPENAI_API_KEY ANTHROPIC_API_KEY GEMINI_API_KEY GOOGLE_API_KEY
@@ -1572,28 +1556,13 @@ test_ai() {
     FX_MODEL="$MODEL" \
     FX_VARIANT="$VARIANT" \
     FX_AI_TIMEOUT=100 \
-    "$test_shell" -c '
+    python3 "$runtime_dir/fixit-ai.py" timeout 120 "$test_shell" -c '
       source "$1"
+      _FX_APPROVED_PAYLOAD="{\"task\":\"print only this exact shell command on one line: ls -la\",\"untrusted_context\":{}}"
       _fx_ai "print only this exact shell command on one line: ls -la"
     ' "$test_shell" "$test_file"
-  ) >"$tmpout" &
-  pid=$!
-  while kill -0 "$pid" 2>/dev/null; do
-    if (( waited >= limit )); then
-      kill "$pid" 2>/dev/null
-      sleep 1
-      kill -9 "$pid" 2>/dev/null
-      wait "$pid" 2>/dev/null
-      rc=124
-      break
-    fi
-    sleep 1
-    waited=$((waited+1))
-  done
-  if [[ "$rc" -eq 0 ]]; then
-    wait "$pid" 2>/dev/null
-    rc=$?
-  fi
+  ) >"$tmpout"
+  rc=$?
   if [[ "$rc" -eq 0 ]]; then
     sug="$(cat "$tmpout" 2>/dev/null)"
   else

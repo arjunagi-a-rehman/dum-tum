@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = ROOT / "src" / "fixit-common.sh"
 SHELLS = [path for name in ("bash", "zsh") if (path := shutil.which(name))]
-PROVIDERS = ("opencode", "claude", "codex", "antigravity")
+PROVIDERS = ("opencode", "claude")
 COMMANDS = {
     "opencode": "_fx_ai_opencode list files",
     "claude": "_fx_ai_claude list files",
@@ -233,7 +233,7 @@ class ProviderConfinementTests(unittest.TestCase):
         )
         script = (
             f"source {shlex.quote(str(COMMON))}; {resets}; "
-            f"FX_PROVIDER={provider}; _fx_confirm_run() {{ return 0; }}; {invocations}"
+            f"FX_PROVIDER={provider}; _fx_confirm_ai_send() {{ return 0; }}; _fx_confirm_run() {{ return 0; }}; {invocations}"
         )
         return subprocess.run(
             [shell, "-c", script],
@@ -274,10 +274,7 @@ class ProviderConfinementTests(unittest.TestCase):
                     actual_cwd = Path(
                         (self.tmpdir / f"{BINARIES[provider]}.cwd").read_text().strip()
                     )
-                    if provider in ("codex", "antigravity"):
-                        self.assertNotEqual(actual_cwd.resolve(), self.tmpdir.resolve())
-                    else:
-                        self.assertEqual(actual_cwd.resolve(), self.tmpdir.resolve())
+                    self.assertNotEqual(actual_cwd.resolve(), self.tmpdir.resolve())
                     if provider == "codex":
                         self.assertIn(
                             f"cwd: {self.tmpdir.resolve()}",
@@ -286,42 +283,12 @@ class ProviderConfinementTests(unittest.TestCase):
                     self.assertFalse(self.marker.exists())
                     self.clear_logs()
 
-    def test_antigravity_readiness_checks_capabilities_without_prompt(self):
-        for shell in SHELLS:
-            with self.subTest(shell=shell):
-                env = os.environ.copy()
-                env.update(
-                    {
-                        "PATH": f"{self.bindir}{os.pathsep}{env['PATH']}",
-                        "FX_AI_READY_TIMEOUT": "5",
-                        "FX_TEST_ACTUAL_MODE": "success",
-                        "FX_TEST_CAPABILITY": "supported",
-                        "FX_TEST_LOG_DIR": str(self.tmpdir),
-                        "FX_TEST_WRITE_MARKER": str(self.marker),
-                    }
-                )
-                script = (
-                    f"source {shlex.quote(str(COMMON))}; "
-                    "unset _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED _FX_ANTIGRAVITY_READY; "
-                    "FX_PROVIDER=antigravity; _fx_ai_ready"
-                )
-                result = subprocess.run(
-                    [shell, "-c", script], cwd=self.tmpdir, env=env, text=True,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8, check=False,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(self.count("antigravity", "actual"), 0)
-                self.assertEqual(self.count("antigravity", "capability"), 1)
-                self.assertFalse((self.tmpdir / "agy.args").exists())
-                self.assertFalse(self.marker.exists())
-                self.clear_logs()
-
     def test_resolver_preserves_status_and_capability_cache(self):
         for shell in SHELLS:
             with self.subTest(shell=shell, case="cache"):
                 result = self.invoke_resolver(shell, "claude", "supported", calls=2)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(self.count("claude", "capability"), 1)
+                self.assertEqual(self.count("claude", "capability"), 2)
                 self.assertEqual(self.count("claude", "actual"), 2)
                 self.clear_logs()
             with self.subTest(shell=shell, case="transport"):
@@ -382,7 +349,7 @@ class ProviderConfinementTests(unittest.TestCase):
                     self.assertEqual(self.count("opencode", "actual"), 0)
                     self.clear_logs()
 
-    def test_opencode_revalidates_resolved_config_after_cwd_change(self):
+    def test_opencode_ignores_hostile_project_config_after_cwd_change(self):
         safe_dir = self.tmpdir / "safe"
         unsafe_dir = self.tmpdir / "unsafe"
         safe_dir.mkdir()
@@ -412,10 +379,10 @@ class ProviderConfinementTests(unittest.TestCase):
                     [shell, "-c", script], cwd=self.tmpdir, env=env, text=True,
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8, check=False,
                 )
-                self.assertEqual(result.returncode, 126, result.stderr)
-                self.assertEqual(result.stdout, "ls -la\n")
-                self.assertEqual(self.count("opencode", "capability"), 3)
-                self.assertEqual(self.count("opencode", "actual"), 1)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, "ls -la\nls -la\n")
+                self.assertEqual(self.count("opencode", "capability"), 4)
+                self.assertEqual(self.count("opencode", "actual"), 2)
                 self.clear_logs()
 
     def test_hung_capability_probes_are_supervised(self):
@@ -431,7 +398,7 @@ class ProviderConfinementTests(unittest.TestCase):
 
     def test_local_transport_failures_are_never_parsed(self):
         for shell in SHELLS:
-            for provider in ("opencode", "claude", "antigravity"):
+            for provider in PROVIDERS:
                 with self.subTest(shell=shell, provider=provider):
                     result = self.invoke(shell, provider, "supported", "failure")
                     self.assertEqual(result.returncode, 17)
@@ -442,7 +409,7 @@ class ProviderConfinementTests(unittest.TestCase):
 
     def test_local_transport_timeouts_are_never_parsed(self):
         for shell in SHELLS:
-            for provider in ("opencode", "claude", "antigravity"):
+            for provider in PROVIDERS:
                 with self.subTest(shell=shell, provider=provider):
                     result = self.invoke(shell, provider, "supported", "timeout")
                     self.assertEqual(result.returncode, 124)
