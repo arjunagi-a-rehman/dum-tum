@@ -103,6 +103,12 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
 .demo-note { margin: 12px 0 0; color: #83949a; font-size: 10px; }
 
 .workflow-section { background: var(--bg); }
+.hook-sequence { display: grid; grid-template-columns: 1fr 26px 1fr 26px 1fr; align-items: center; gap: 13px; margin-bottom: 46px; }
+.hook-sequence > div { min-height: 158px; padding: 23px 24px; border: 1px solid #34424a; background: #111c23; }
+.hook-sequence > div > span { display: block; margin-bottom: 20px; color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+.hook-sequence strong { font-size: 15px; letter-spacing: -.045em; }
+.hook-sequence p { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.sequence-arrow { color: var(--green); font-size: 21px; text-align: center; }
 .flow-list { margin: 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .flow-list li { display: grid; grid-template-columns: 125px 1fr 160px; align-items: start; gap: 30px; padding: 28px 0; border-bottom: 1px solid var(--line); }
 .flow-number { color: var(--green); font-size: 14px; }
@@ -157,6 +163,39 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
 .copy-button { flex: none; padding: 10px 13px; border: 1px solid #638364; background: transparent; color: var(--green); font-size: 11px; font-weight: 750; text-transform: uppercase; }
 .copy-button:hover { background: var(--green); color: var(--bg); }
 .install-bottom { border-top: 1px solid #426144; line-height: 1.5; }
+.install-guide { margin-top: 52px; }
+.install-guide-heading { display: flex; align-items: end; justify-content: space-between; gap: 30px; margin-bottom: 24px; }
+.install-guide-heading .section-index { margin-bottom: 12px; }
+.install-guide-heading h3 { margin: 0; font-size: clamp(1.7rem, 3vw, 2.65rem); line-height: 1.15; letter-spacing: -.075em; }
+.install-guide-heading > p { max-width: 280px; margin: 0 0 2px; color: #adbeaf; font-size: 11px; line-height: 1.7; }
+.install-guide-layout { display: grid; grid-template-columns: minmax(280px, .88fr) minmax(0, 1.45fr); border: 1px solid #557252; background: #0c1511; }
+.install-step-list { display: grid; grid-template-rows: repeat(6, 1fr); border-right: 1px solid #426144; background: #112016; }
+.install-step-list button { display: grid; grid-template-columns: 35px 1fr 14px; align-items: center; gap: 11px; min-height: 79px; padding: 13px 18px; border: 0; border-bottom: 1px solid #2d4634; background: none; color: #bccbc0; text-align: left; }
+.install-step-list button:last-child { border-bottom: 0; }
+.install-step-list button:hover { background: #193021; }
+.install-step-list button[aria-selected="true"] { box-shadow: inset 3px 0 var(--green); background: #203a27; color: var(--text); }
+.install-step-list .step-index { align-self: start; padding-top: 2px; color: var(--green); font-size: 12px; }
+.install-step-list strong, .install-step-list small { display: block; }
+.install-step-list strong { font-size: 12px; line-height: 1.5; }
+.install-step-list small { margin-top: 4px; color: #8fa694; font-size: 10px; line-height: 1.4; }
+.step-marker { color: #789e7b; font-size: 13px; }
+.install-step-list button[aria-selected="true"] .step-marker { color: var(--green); }
+.install-stage-shell { display: flex; flex-direction: column; min-width: 0; }
+.install-stage-top { display: flex; justify-content: space-between; gap: 15px; padding: 15px 21px; border-bottom: 1px solid #426144; color: #8caa91; font-size: 10px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.install-stage-top span:last-child { color: var(--green); }
+.install-stage { flex: 1; padding: 34px clamp(24px, 4vw, 58px) 20px; }
+.install-stage-kicker { color: var(--green); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
+.install-stage h4 { max-width: 520px; margin: 17px 0 16px; font-size: clamp(1.45rem, 2.6vw, 2.3rem); line-height: 1.18; letter-spacing: -.07em; }
+.install-stage > p { max-width: 570px; margin-bottom: 22px; color: #bfcec1; font-size: 12px; line-height: 1.75; }
+.install-stage p code { color: var(--green); }
+.stage-console { display: grid; gap: 10px; overflow-x: auto; padding: 21px 23px; border: 1px solid #304739; background: #08100c; color: #d7e4d8; font-size: 11px; line-height: 1.45; white-space: nowrap; }
+.stage-console em { margin-right: 12px; color: var(--green); font-style: normal; }
+.stage-console .stage-annotation { color: #91ad99; }
+.install-stage > .stage-detail { margin: 19px 0 0; color: #9cb09f; font-size: 11px; }
+.install-stage-controls { display: flex; justify-content: space-between; gap: 10px; padding: 17px 22px; border-top: 1px solid #304739; }
+.install-stage-controls button { padding: 9px 12px; border: 1px solid #557252; background: transparent; color: var(--green); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.install-stage-controls button:hover:not(:disabled) { background: var(--green); color: #0a1214; }
+.install-stage-controls button:disabled { border-color: #2d4433; color: #66836b; cursor: default; }
 .install-links { display: flex; flex-wrap: wrap; gap: 25px; margin-top: 24px; }
 .install-links a { color: #c3d8c1; font-size: 11px; font-weight: 700; text-decoration: none; }
 .install-links a:hover { color: var(--green); }
@@ -191,6 +230,8 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
   .hero-copy { padding: 87px 0 95px; }
   .section, .demo-section { padding: 84px 0; }
   .safety-grid, .providers-grid, .faq-grid { gap: 50px; }
+  .install-guide-layout { grid-template-columns: minmax(230px, .9fr) minmax(0, 1.3fr); }
+  .install-step-list button { padding-inline: 13px; }
 }
 
 @media (max-width: 700px) {
@@ -222,6 +263,10 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
   .terminal-footer { font-size: 9px; }
   .terminal-footer span:last-child { display: none; }
   .flow-list li { grid-template-columns: 56px 1fr; gap: 14px; }
+  .hook-sequence { grid-template-columns: 1fr; gap: 0; margin-bottom: 34px; }
+  .hook-sequence > div { min-height: 0; padding: 18px 20px; }
+  .hook-sequence > div > span { margin-bottom: 10px; }
+  .sequence-arrow { padding: 4px; transform: rotate(90deg); }
   .flow-number span { display: none; }
   .flow-status { grid-column: 2; justify-self: start; }
   .example-table-head, .example-row { grid-template-columns: minmax(100px, .9fr) minmax(0, 1.7fr); gap: 10px; }
@@ -232,6 +277,14 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
   .provider-list > div { grid-template-columns: 95px 1fr; gap: 12px; }
   .install-command { padding: 24px 16px; }
   .install-bottom span:last-child { display: none; }
+  .install-guide-heading { display: block; }
+  .install-guide-heading > p { max-width: none; margin-top: 13px; }
+  .install-guide-layout { grid-template-columns: 1fr; }
+  .install-step-list { grid-template-columns: repeat(6, minmax(200px, 1fr)); grid-template-rows: auto; overflow-x: auto; border-right: 0; border-bottom: 1px solid #426144; }
+  .install-step-list button { min-height: 80px; border-right: 1px solid #2d4634; border-bottom: 0; }
+  .install-step-list button:last-child { border-right: 0; }
+  .install-step-list button[aria-selected="true"] { box-shadow: inset 0 -3px var(--green); }
+  .install-stage { min-height: 425px; padding: 29px 23px 19px; }
   .footer-inner { flex-wrap: wrap; justify-content: space-between; }
   .footer-links { margin-left: 0; }
   .footer-license { width: 100%; }
@@ -250,6 +303,8 @@ kbd { padding: 1px 5px; border: 1px solid #60717a; color: var(--text); }
   .policy-row { font-size: 10px; }
   .install-command code { font-size: 12px; }
   .copy-button { padding: 7px; font-size: 9px; }
+  .install-stage { min-height: 475px; padding-inline: 17px; }
+  .stage-console { padding-inline: 14px; font-size: 10px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
