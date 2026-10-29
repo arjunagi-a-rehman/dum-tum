@@ -59,6 +59,8 @@ for index, line in enumerate(sys.stdin):
     with open(os.environ["FX_TEST_AGY_TURNS"], "a") as log:
         log.write(json.dumps({"pid": os.getpid(), "response": response}) + "\n")
     print(json.dumps({"event": "result", "result": {"status": "SUCCESS", "response": response}}), flush=True)
+    if index == 0 and (control / "exit-after-first").exists():
+        raise SystemExit(0)
 '''
 
 
@@ -396,6 +398,21 @@ class AntigravitySessionTests(unittest.TestCase):
             active.stdout.close()
             active.stderr.close()
         self.wait_for_removal(session)
+
+    def test_idle_provider_exit_restarts_before_next_request(self):
+        session = self.session()
+        (self.control / "exit-after-first").touch()
+        first = self.request(session)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        provider_pid = self.records(self.launches)[0]["pid"]
+        deadline = time.monotonic() + 2
+        while self.process_exists(provider_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(self.process_exists(provider_pid))
+        second = self.request(session)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("ls -la", second.stdout)
+        self.assertEqual(len(self.records(self.launches)), 2)
 
     def test_provider_diagnostics_are_sanitized(self):
         session = self.session()

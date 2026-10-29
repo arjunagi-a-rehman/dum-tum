@@ -33,6 +33,7 @@ import sys
 import termios
 import time
 import unicodedata
+from typing import Optional
 
 HEADS = {
     "find", "ls", "cd", "cat", "grep", "rg", "fd", "mdfind", "locate", "open", "git",
@@ -1014,9 +1015,9 @@ def _provider_failure(provider: dict, status: int, stdout: str = "") -> dict:
 
 
 def _antigravity_turn(provider: dict, body: str, timeout: float, workdir: str, owner: int,
-                      client: socket.socket = None) -> dict:
+                      client: Optional[socket.socket] = None) -> dict:
     command = provider["command"]
-    if provider["process"] is None:
+    if provider["process"] is None or provider["process"].poll() is not None:
         try:
             _start_provider(provider, command, workdir)
         except FileNotFoundError:
