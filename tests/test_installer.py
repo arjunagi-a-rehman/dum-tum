@@ -402,6 +402,8 @@ printf '%s|%s' "$API_KEY" "$API_KEY_PROVIDER"
                     self.invocation_counts(),
                     {"opencode": 0, "claude": 0, "codex": 0, "agy": 0},
                 )
+                if provider == "antigravity":
+                    self.assertIn("does not have a verified no-tools boundary", result.stdout + result.stderr)
 
     def test_skip_ai_test_still_requires_selected_cli_on_path(self):
         result = self.run_installer("--provider", "opencode", env=self.env())

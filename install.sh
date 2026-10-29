@@ -995,6 +995,7 @@ validate_selected_provider() {
       ;;
     antigravity)
       [[ "$HAVE_ANTIGRAVITY" -eq 1 ]] || { err "Antigravity CLI not found on PATH"; return 1; }
+      warn "Antigravity does not have a verified no-tools boundary; its terminal sandbox is enabled, but plan mode may be ineffective"
       ;;
   esac
 }

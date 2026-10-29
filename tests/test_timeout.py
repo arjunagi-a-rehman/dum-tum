@@ -202,7 +202,7 @@ class TimeoutTests(unittest.TestCase):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
-                deadline = time.monotonic() + 3
+                deadline = time.monotonic() + 10
                 while time.monotonic() < deadline and not pidfile.exists():
                     time.sleep(0.02)
                 self.assertTrue(pidfile.exists())

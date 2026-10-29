@@ -26,6 +26,6 @@ exec zsh          # or: exec bash
 - Prompts passed to some local CLI providers may be visible to other local users in the process table while the provider runs.
 - Every shell AI request requires approval of the displayed provider and redacted JSON payload before transmission. Failed-command AI is off by default. Installer smoke tests send only a fixed diagnostic task, with no local context.
 - AI suggestions require fresh confirmation before execution. Queued input, terminal controls, and active history event designators cannot authorize a different command.
-- CLI providers require no-tools controls and run in an empty temporary directory. Codex and Antigravity are currently refused because their sandbox modes do not establish a complete no-tools boundary.
+- OpenCode and Claude require verified no-tools controls and run in an empty temporary directory. Codex is refused because its sandbox does not establish that boundary. Antigravity is optional and displays an installer warning: its terminal sandbox is enabled, but its plan mode may be ineffective and it does not have a verified no-tools boundary. Its per-shell session reuses an isolated temporary directory and retains conversation context until idle, unload, or shell exit.
 
 Set `FX_PROVIDER=none` for local-only operation. Set `FX_AI_ON_FAIL=1` to offer AI assistance for eligible failures. This still requires request approval.

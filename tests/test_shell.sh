@@ -293,7 +293,8 @@ rc=$?
 if (( rc != 0 )); then bad "provider subshell exited with status $rc"; fi
 (
   FX_PROVIDER=antigravity
-  check_rc "antigravity refuses model tools" 126 _fx_ai_antigravity list files
+  _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=0
+  check_rc "antigravity rejects unsupported controls" 126 _fx_ai_antigravity list files
   FX_PROVIDER=codex
   check_rc "codex refuses model tools" 126 _fx_ai_codex list files
 )
