@@ -1047,8 +1047,9 @@ def _antigravity_turn(provider: dict, body: str, timeout: float, workdir: str, o
     if client is not None:
         selector.register(client, selectors.EVENT_READ, "client")
     try:
-        while selector.get_map():
-            if not any(key.data in ("stdout", "stderr") for key in selector.get_map().values()):
+        while True:
+            if (not any(key.data in ("stdout", "stderr") for key in selector.get_map().values())
+                    and process.poll() is not None):
                 break
             if not _owner_alive(owner):
                 raise _SupervisorSignal(signal.SIGTERM)

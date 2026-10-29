@@ -36,6 +36,10 @@ if (control / "no-read").exists():
     time.sleep(30)
 for index, line in enumerate(sys.stdin):
     request = json.loads(line)
+    if (control / "close-output").exists():
+        sys.stdout.close()
+        sys.stderr.close()
+        time.sleep(30)
     if (control / "fail").exists():
         if index == 0:
             print(json.dumps({"event": "init", "init": {}}), flush=True)
@@ -52,6 +56,7 @@ for index, line in enumerate(sys.stdin):
         print(json.dumps({"event": "init", "init": {}}), flush=True)
     if (control / "diagnostics").exists():
         print("\x1b[8mconcealed", file=sys.stderr, flush=True)
+        time.sleep(0.05)
     if (control / "slow").exists():
         (control / "turn-started").write_text(str(os.getpid()))
         time.sleep(30)
@@ -341,6 +346,23 @@ class AntigravitySessionTests(unittest.TestCase):
             time.sleep(0.05)
         self.assertFalse(self.process_exists(provider_pid))
         (self.control / "no-read").unlink()
+        recovered = self.request(session)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(len(self.records(self.launches)), 2)
+
+    def test_timeout_after_provider_output_eof(self):
+        session = self.session()
+        (self.control / "close-output").touch()
+        started = time.monotonic()
+        result = self.request(session, timeout="2")
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertLess(time.monotonic() - started, 8)
+        provider_pid = self.records(self.launches)[0]["pid"]
+        deadline = time.monotonic() + 2
+        while self.process_exists(provider_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(self.process_exists(provider_pid))
+        (self.control / "close-output").unlink()
         recovered = self.request(session)
         self.assertEqual(recovered.returncode, 0, recovered.stderr)
         self.assertEqual(len(self.records(self.launches)), 2)
