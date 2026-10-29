@@ -77,6 +77,7 @@ _fx_precmd() {
 }
 
 dum_tum_unload() {
+  _fx_antigravity_stop
   [[ "${_FX_ZSH_LOADED:-0}" == 1 ]] || return 0
   if [[ "${functions[command_not_found_handler]-}" == "$_FX_ZSH_OWN_CNF" ]]; then
     unfunction command_not_found_handler

@@ -6,6 +6,8 @@ Usage:
     fixit-ai.py secrets-detect  # stdin: text -> exit 0 when a known secret shape is found
     fixit-ai.py secrets-redact  # stdin: text -> redacted text on stdout
     fixit-ai.py timeout SECS CMD [ARG ...] # supervise a command and its process group
+    fixit-ai.py antigravity-request DIR OWNER SECS CMD [ARG ...] # reuse a session worker
+    fixit-ai.py antigravity-stop DIR # stop a session worker and remove its directory
     fixit-ai.py body-openrouter # env FX_SYS, FX_USER, FX_MODEL -> OpenRouter JSON body
     fixit-ai.py body-openai     # env FX_SYS, FX_USER, FX_MODEL -> OpenAI JSON body
     fixit-ai.py body-anthropic  # env FX_SYS, FX_USER, FX_MODEL -> Anthropic messages JSON body
@@ -20,12 +22,16 @@ import json
 import math
 import os
 import re
+import selectors
 import signal
 import shutil
+import socket
+import stat
 import subprocess
 import shlex
 import sys
 import termios
+import time
 import unicodedata
 
 HEADS = {
@@ -797,6 +803,375 @@ def cmd_timeout(args: list) -> int:
     return run_with_timeout(seconds, args[1:])
 
 
+def _session_seconds(value) -> float:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise PayloadError(f"invalid timeout: {value}") from exc
+    if not math.isfinite(seconds) or seconds < 0:
+        raise PayloadError(f"invalid timeout: {value}")
+    return seconds
+
+
+def _session_directory(path: str) -> str:
+    path = os.path.abspath(path)
+    info = os.lstat(path)
+    if (not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.getuid() or info.st_mode & 0o077
+            or not os.path.basename(path).startswith("fixit-agy.")):
+        raise PayloadError("invalid Antigravity session directory")
+    return path
+
+
+def _socket_message(connection: socket.socket) -> dict:
+    data = bytearray()
+    while not data.endswith(b"\n"):
+        chunk = connection.recv(65536)
+        if not chunk:
+            break
+        data.extend(chunk)
+        if len(data) > 16 * 1024 * 1024:
+            raise PayloadError("Antigravity session message is too large")
+    if not data:
+        raise PayloadError("empty Antigravity session message")
+    return _object(_json(data.decode("utf-8")), "Antigravity session message")
+
+
+def _send_socket_message(connection: socket.socket, message: dict) -> None:
+    connection.sendall(json.dumps(message).encode("utf-8") + b"\n")
+
+
+def _session_response(status: int, stdout: str = "", stderr: str = "") -> dict:
+    return {"status": status, "stdout": stdout, "stderr": stderr}
+
+
+def _owner_alive(owner: int) -> bool:
+    try:
+        os.kill(owner, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _launch_session_worker(session_dir: str, owner: int) -> None:
+    subprocess.Popen(
+        [
+            sys.executable,
+            os.path.abspath(__file__),
+            "antigravity-worker",
+            session_dir,
+            str(owner),
+            os.environ.get("FX_AGY_IDLE_TIMEOUT", "300"),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+def _connect_session(session_dir: str, owner: int, deadline: float) -> socket.socket:
+    socket_path = os.path.join(session_dir, "session.sock")
+    launched = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Antigravity request timed out")
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(remaining)
+        try:
+            connection.connect(socket_path)
+            return connection
+        except (FileNotFoundError, ConnectionRefusedError):
+            connection.close()
+            if not launched:
+                try:
+                    os.unlink(socket_path)
+                except FileNotFoundError:
+                    pass
+                _launch_session_worker(session_dir, owner)
+                launched = True
+            time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+
+
+def cmd_antigravity_request(args: list) -> int:
+    if len(args) < 4:
+        sys.stderr.write("usage: fixit-ai.py antigravity-request DIR OWNER SECS CMD [ARG ...]\n")
+        return 2
+    try:
+        session_dir = _session_directory(args[0])
+        owner = int(args[1])
+        if owner <= 0:
+            raise PayloadError("invalid Antigravity session owner")
+        seconds = _session_seconds(args[2])
+        body = sys.stdin.read()
+        deadline = time.monotonic() + seconds
+        connection = _connect_session(session_dir, owner, deadline)
+        with connection:
+            remaining = max(0, deadline - time.monotonic())
+            connection.settimeout(remaining)
+            _send_socket_message(connection, {
+                "body": body,
+                "command": args[3:],
+                "timeout": remaining,
+            })
+            connection.settimeout(remaining + 3)
+            response = _socket_message(connection)
+        status = response.get("status")
+        stdout = response.get("stdout")
+        stderr = response.get("stderr")
+        if not isinstance(status, int) or not isinstance(stdout, str) or not isinstance(stderr, str):
+            raise PayloadError("malformed Antigravity session response")
+        sys.stdout.write(stdout)
+        sys.stdout.flush()
+        sys.stderr.write(stderr)
+        sys.stderr.flush()
+        return status
+    except TimeoutError:
+        sys.stderr.write("Antigravity request timed out\n")
+        return 124
+    except (OSError, PayloadError, ValueError) as exc:
+        sys.stderr.write(f"Antigravity session error: {exc}\n")
+        return 1
+
+
+def cmd_antigravity_stop(args: list) -> int:
+    if len(args) != 1:
+        sys.stderr.write("usage: fixit-ai.py antigravity-stop DIR\n")
+        return 2
+    try:
+        session_dir = _session_directory(args[0])
+    except FileNotFoundError:
+        return 0
+    except (OSError, PayloadError) as exc:
+        sys.stderr.write(f"Antigravity session error: {exc}\n")
+        return 1
+    socket_path = os.path.join(session_dir, "session.sock")
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    connection.settimeout(1)
+    try:
+        connection.connect(socket_path)
+    except (FileNotFoundError, ConnectionRefusedError):
+        connection.close()
+        shutil.rmtree(session_dir, ignore_errors=True)
+        return 0
+    except OSError as exc:
+        connection.close()
+        sys.stderr.write(f"Antigravity session error: {exc}\n")
+        return 1
+    try:
+        with connection:
+            _send_socket_message(connection, {"stop": True})
+            response = _socket_message(connection)
+        if response.get("status") != 0:
+            return 1
+        deadline = time.monotonic() + 5
+        while os.path.exists(session_dir) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return 0 if not os.path.exists(session_dir) else 1
+    except (OSError, PayloadError) as exc:
+        sys.stderr.write(f"Antigravity session error: {exc}\n")
+        return 1
+
+
+def _provider_diagnostics(provider: dict) -> str:
+    return bytes(provider["stderr"]).decode("utf-8", errors="replace")
+
+
+def _stop_provider(provider: dict) -> None:
+    process = provider["process"]
+    if process is not None:
+        _cleanup_process(process)
+    provider["process"] = None
+
+
+def _start_provider(provider: dict, command: list, workdir: str) -> None:
+    _stop_provider(provider)
+    provider["stdout"] = b""
+    provider["stderr"] = bytearray()
+    provider["process"] = subprocess.Popen(
+        command,
+        cwd=workdir,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+
+
+def _provider_failure(provider: dict, status: int, stdout: str = "") -> dict:
+    process = provider["process"]
+    if process is not None:
+        _, stderr = _stop_process(process)
+        provider["stderr"].extend(stderr)
+    provider["process"] = None
+    return _session_response(status, stdout, _provider_diagnostics(provider))
+
+
+def _antigravity_turn(provider: dict, body: str, timeout: float, workdir: str, owner: int) -> dict:
+    command = provider["command"]
+    if provider["process"] is None:
+        try:
+            _start_provider(provider, command, workdir)
+        except FileNotFoundError:
+            return _session_response(127, "", f"{command[0]}: command not found\n")
+        except PermissionError:
+            return _session_response(126, "", f"{command[0]}: permission denied\n")
+        except OSError as exc:
+            return _session_response(1, "", f"{command[0]}: {exc}\n")
+    provider["stderr"] = bytearray()
+    process = provider["process"]
+    body = body.strip()
+    try:
+        request = _object(_json(body), "Antigravity request")
+        if request.get("event") != "user":
+            raise PayloadError("Antigravity request is not a user event")
+        process.stdin.write(body.encode("utf-8") + b"\n")
+        process.stdin.flush()
+    except (BrokenPipeError, OSError):
+        status = process.poll()
+        return _provider_failure(provider, status if status not in (None, 0) else 1)
+    except PayloadError as exc:
+        return _session_response(2, "", f"Antigravity request error: {exc}\n")
+
+    deadline = time.monotonic() + timeout
+    events = []
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+    selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    try:
+        while selector.get_map():
+            if not _owner_alive(owner):
+                raise _SupervisorSignal(signal.SIGTERM)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return _provider_failure(provider, 124)
+            for key, _ in selector.select(min(1, remaining)):
+                chunk = os.read(key.fileobj.fileno(), 65536)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                if key.data == "stderr":
+                    provider["stderr"].extend(chunk)
+                    if len(provider["stderr"]) > 65536:
+                        del provider["stderr"][:-65536]
+                    continue
+                provider["stdout"] += chunk
+                while b"\n" in provider["stdout"]:
+                    line, provider["stdout"] = provider["stdout"].split(b"\n", 1)
+                    events.append(line.decode("utf-8", errors="replace"))
+                    try:
+                        event = _object(_json(line.decode("utf-8")), "Antigravity event")
+                    except (PayloadError, UnicodeDecodeError):
+                        return _provider_failure(provider, 1, "")
+                    if event.get("event") == "result":
+                        return _session_response(
+                            0,
+                            "\n".join(events) + "\n",
+                            _provider_diagnostics(provider),
+                        )
+        status = process.wait()
+        output = "\n".join(events)
+        if provider["stdout"]:
+            output += provider["stdout"].decode("utf-8", errors="replace")
+        if output:
+            output += "\n"
+        return _provider_failure(provider, status, output if status == 0 else "")
+    finally:
+        selector.close()
+
+
+def _antigravity_worker(session_dir: str, owner: int, idle_timeout: float) -> int:
+    session_dir = _session_directory(session_dir)
+    socket_path = os.path.join(session_dir, "session.sock")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        server.bind(socket_path)
+        os.chmod(socket_path, 0o600)
+        server.listen(8)
+    except OSError:
+        server.close()
+        return 1
+    workdir = os.path.join(session_dir, "work")
+    os.makedirs(workdir, mode=0o700, exist_ok=True)
+    provider = {"process": None, "command": None, "stdout": b"", "stderr": bytearray()}
+    handled_signals = tuple(
+        sig for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+        if sig is not None
+    )
+    previous_handlers = {sig: signal.getsignal(sig) for sig in handled_signals}
+
+    def stop_worker(signum, _frame):
+        raise _SupervisorSignal(signum)
+
+    status = 0
+    last_request = time.monotonic()
+    try:
+        for sig in handled_signals:
+            signal.signal(sig, stop_worker)
+        while True:
+            idle_remaining = idle_timeout - (time.monotonic() - last_request)
+            if idle_remaining <= 0 or not _owner_alive(owner):
+                break
+            server.settimeout(min(1, idle_remaining))
+            try:
+                connection, _ = server.accept()
+            except socket.timeout:
+                continue
+            with connection:
+                connection.settimeout(5)
+                try:
+                    request = _socket_message(connection)
+                    if request.get("stop") is True:
+                        _send_socket_message(connection, _session_response(0))
+                        break
+                    body = request.get("body")
+                    command = request.get("command")
+                    timeout = _session_seconds(request.get("timeout"))
+                    if not isinstance(body, str) or not isinstance(command, list) or not command:
+                        raise PayloadError("malformed Antigravity worker request")
+                    if not all(isinstance(part, str) for part in command):
+                        raise PayloadError("malformed Antigravity worker command")
+                    if provider["command"] is not None and command != provider["command"]:
+                        raise PayloadError("Antigravity worker configuration changed")
+                    provider["command"] = command
+                    response = _antigravity_turn(provider, body, timeout, workdir, owner)
+                except _SupervisorSignal:
+                    raise
+                except (OSError, PayloadError, ValueError) as exc:
+                    response = _session_response(2, "", f"Antigravity worker error: {exc}\n")
+                try:
+                    _send_socket_message(connection, response)
+                except BrokenPipeError:
+                    pass
+            last_request = time.monotonic()
+    except _SupervisorSignal as exc:
+        status = 128 + exc.signum
+    finally:
+        server.close()
+        _stop_provider(provider)
+        try:
+            os.unlink(socket_path)
+        except FileNotFoundError:
+            pass
+        shutil.rmtree(session_dir, ignore_errors=True)
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+    return status
+
+
+def cmd_antigravity_worker(args: list) -> int:
+    if len(args) != 3:
+        return 2
+    try:
+        return _antigravity_worker(args[0], int(args[1]), _session_seconds(args[2]))
+    except (OSError, PayloadError, ValueError):
+        return 1
+
+
 def _chat_body(token_field: str) -> dict:
     return {
         "model": os.environ["FX_MODEL"],
@@ -1163,6 +1538,12 @@ def main() -> None:
         raise SystemExit(cmd_opencode_config_deny())
     elif mode == "timeout":
         raise SystemExit(cmd_timeout(sys.argv[2:]))
+    elif mode == "antigravity-request":
+        raise SystemExit(cmd_antigravity_request(sys.argv[2:]))
+    elif mode == "antigravity-stop":
+        raise SystemExit(cmd_antigravity_stop(sys.argv[2:]))
+    elif mode == "antigravity-worker":
+        raise SystemExit(cmd_antigravity_worker(sys.argv[2:]))
     elif mode in ("body", "body-openrouter"):
         cmd_body_openrouter()
     elif mode == "body-openai":

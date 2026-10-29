@@ -124,6 +124,7 @@ _fx_bash_restore_prompt_command() {
 }
 
 _fx_bash_unload_state() {
+  _fx_antigravity_stop
   [[ "${_FX_BASH_LOADED:-0}" == 1 ]] || return 0
   if [[ "$(declare -f command_not_found_handle)" == "$_FX_BASH_OWN_CNF" ]]; then
     unset -f command_not_found_handle

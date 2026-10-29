@@ -47,7 +47,7 @@ dum-tum hooks `accept-line` — the moment you press Enter, before your shell re
 
 When an AI suggestion needs confirmation, Enter submits it through your shell's normal line editor, `e` leaves it in the buffer for editing, and `n` cancels it.
 
-The second difference: **it doesn't demand another API key.** Supported `opencode` and `claude` (Claude Code) versions can use your existing login. Codex and Antigravity are currently refused for lack of a verified no-tools boundary. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
+The second difference: **it doesn't demand another API key.** Supported `opencode` and `claude` (Claude Code) versions can use your existing login. Antigravity is also available with an explicit warning because it lacks a verified no-tools boundary; Codex is currently refused. OpenRouter is there if you'd rather bring a key. Local-only mode works with no AI at all.
 
 ---
 
@@ -101,6 +101,7 @@ dum_tum_unload
 
 ```bash
 ./install.sh --yes --provider opencode --model anthropic/claude-sonnet-4
+./install.sh --yes --provider antigravity
 ./install.sh --yes --provider openrouter
 ./install.sh --yes --provider openai
 ./install.sh --yes --provider anthropic
@@ -111,7 +112,7 @@ dum_tum_unload
 
 For a key-based non-interactive install, provide only the environment variable matching the selected provider: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GEMINI_API_KEY` (`GOOGLE_API_KEY` is also accepted for Gemini). The removed `--key` option is rejected because command-line values are exposed in shell history and process arguments. To enter a key without echoing it, omit `--yes` and run with the provider only, such as `./install.sh --provider openai`; the installer uses a hidden terminal prompt.
 
-`--skip-ai-test` prevents all provider CLI execution, live model discovery, authentication checks, and network smoke tests. The installer still verifies that a selected local CLI exists on `PATH`; storing a legacy Codex or Antigravity choice does not enable it at runtime; a key-based provider without its matching key is disabled. Choosing `--provider none` performs no AI-provider or model-network activity.
+`--skip-ai-test` prevents all provider CLI execution, live model discovery, authentication checks, and network smoke tests. The installer still verifies that a selected local CLI exists on `PATH`; storing a legacy Codex choice does not enable it at runtime; a key-based provider without its matching key is disabled. Choosing `--provider none` performs no AI-provider or model-network activity. Selecting Antigravity always displays its no-tools warning.
 
 Requires `python3`, `curl`, and either zsh or Bash 4+.
 
@@ -134,9 +135,13 @@ This tool runs things in your shell. That deserves a straight answer about what 
 - **Local mode is fully offline.** Nothing leaves your machine, period.
 - **Keys aren't passed as process arguments.** The installer accepts them through a hidden prompt or provider-specific environment variable, and HTTP credentials and request bodies reach `curl` through stdin rather than argv. As with any environment-based secret, another process with sufficient permission may still inspect the environment. Your rc file is `chmod 600` after install.
 
-Before sending a prompt to a local CLI backend, dum-tum requires controls that disable tools. OpenCode runs in an empty temporary directory without external plugins and with deny-all tool and permission configuration. Claude runs in an empty temporary directory in safe, plan mode with no tools or MCP servers. Installed versions without those controls are refused. Codex and Antigravity are currently refused because their sandbox or plan modes do not establish a complete no-tools boundary. Choose an HTTP provider, supported OpenCode, or supported Claude instead. These controls constrain model tools; the CLI executable itself remains trusted software with your user permissions.
+Before sending a prompt to a local CLI backend, dum-tum checks the provider's available controls. OpenCode runs in an empty temporary directory without external plugins and with deny-all tool and permission configuration. Claude runs in an empty temporary directory in safe, plan mode with no tools or MCP servers. Codex is currently refused because its sandbox does not establish a complete no-tools boundary. Antigravity runs with its terminal sandbox and slash-command expansion disabled, but some `agy` versions report that plan mode has no effect in this configuration. Antigravity therefore does not have a verified no-tools boundary; the installer displays an explicit warning before selecting it. Choose an HTTP provider, supported OpenCode, or supported Claude if you require that guarantee. The CLI executable itself remains trusted software with your user permissions.
 
-OpenCode passes its prompt as a CLI argument, which may be visible to other local users in the process table. Claude sends its prompt through stdin.
+To avoid Antigravity's startup cost on every prompt, dum-tum reuses one `agy` stream-json session and isolated temporary workspace per shell. The session stops on unload/reload, shell exit, or five minutes without a request; changing the model or reasoning effort restarts it. The `agy` conversation retains earlier requests during that session, so later prompts may include earlier context.
+
+OpenCode passes its prompt as a CLI argument, which may be visible to other local users in the process table. Claude and Antigravity send prompts through stdin.
+
+Antigravity readiness checks inspect CLI capabilities without sending a model prompt. Authentication and transport errors are reported by the actual AI request.
 
 What AI mode sends: OS and shell, cwd, up to 20 directory names, bounded project script or Make target names, bounded aliases, and the task or failed input. Context is encoded as JSON data, and the exact redacted payload is shown before you approve sending it. Existing commands such as `find`, `open`, and `type` are left to the shell. Failed commands matching a known secret pattern are not sent; matching values in other context are redacted. Detection is heuristic: novel, obfuscated, fragmented, or unlabeled secrets may not be recognized, and filenames, aliases, command arguments, and natural-language prompts can still be sensitive. Do not include secrets in data you allow AI mode to send.
 
@@ -146,7 +151,7 @@ What AI mode sends: OS and shell, cwd, up to 20 directory names, bounded project
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `none`; legacy `codex`/`antigravity` values are refused |
+| `FX_PROVIDER` | `openrouter` | `openrouter` · `openai` · `anthropic` · `gemini` · `opencode` · `claude` · `antigravity` (warned) · `none`; legacy `codex` is refused |
 | `FX_MODEL` | provider default | model id |
 | `FX_VARIANT` | model default | reasoning effort (`low`/`medium`/`high`) |
 | `FX_AI_TIMEOUT` | `90` | seconds before a CLI backend call and its descendants are killed |

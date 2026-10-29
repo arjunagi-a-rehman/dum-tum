@@ -331,9 +331,28 @@ _fx_confinement_error() {
   return 126
 }
 
+_fx_antigravity_confinement_supported() {
+  if [[ -z "${_FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED+x}" ]]; then
+    local help
+    _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=0
+    if help="$(_fx_timeout "${FX_AI_READY_TIMEOUT:-10}" agy --help 2>&1)"; then
+      if _fx_help_has_options "$help" --sandbox --mode=plan --disable-slash-commands \
+          --input-format --output-format; then
+        _FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1
+      fi
+    fi
+  fi
+  [[ "$_FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED" == 1 ]]
+}
+
 _fx_antigravity_ready() {
-  _FX_ANTIGRAVITY_CONFINEMENT_FAILED=1
-  return 1
+  _fx_provider_executable agy >/dev/null 2>&1 || return 1
+  if ! _fx_antigravity_confinement_supported; then
+    _FX_ANTIGRAVITY_CONFINEMENT_FAILED=1
+    return 1
+  fi
+  unset _FX_ANTIGRAVITY_CONFINEMENT_FAILED
+  return 0
 }
 
 _fx_provider_executable() {
@@ -532,12 +551,42 @@ _fx_ai_claude() {  # $* = intent
   printf '%s\n' "$response"
 }
 
-_fx_ai_codex() {
-  _fx_confinement_error codex
+_fx_antigravity_stop() {
+  [[ -n "${_FX_AGY_SESSION_DIR:-}" ]] || return 0
+  python3 "$_FX_AI_PY" antigravity-stop "$_FX_AGY_SESSION_DIR" >/dev/null 2>&1 || true
+  unset _FX_AGY_SESSION_DIR _FX_AGY_SESSION_CONFIG
 }
 
-_fx_ai_antigravity() {
-  _fx_confinement_error antigravity
+_fx_ai_antigravity() {  # $* = intent
+  local prompt body response rc=0 executable config margs=()
+  _fx_antigravity_confinement_supported || { _fx_confinement_error antigravity; return; }
+  executable="$(_fx_provider_executable agy)" || return 127
+  config="$executable"$'\n'"${FX_MODEL:-}"$'\n'"${FX_VARIANT:-}"
+  if [[ -n "${_FX_AGY_SESSION_DIR:-}" && "$config" != "${_FX_AGY_SESSION_CONFIG:-}" ]]; then
+    _fx_antigravity_stop
+  fi
+  if [[ -n "${_FX_AGY_SESSION_DIR:-}" && ! -d "$_FX_AGY_SESSION_DIR" ]]; then
+    unset _FX_AGY_SESSION_DIR _FX_AGY_SESSION_CONFIG
+  fi
+  if [[ -z "${_FX_AGY_SESSION_DIR:-}" ]]; then
+    _FX_AGY_SESSION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fixit-agy.XXXXXX")" || return 1
+    _FX_AGY_SESSION_CONFIG="$config"
+  fi
+  prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
+  body="$(printf '%s' "$prompt" | python3 "$_FX_AI_PY" body-antigravity)"
+  [[ -n "${FX_MODEL:-}" ]] && margs+=(--model "$FX_MODEL")
+  [[ -n "${FX_VARIANT:-}" ]] && margs+=(--effort "$FX_VARIANT")
+  response="$(printf '%s\n' "$body" | _fx_transport_extract antigravity \
+    python3 "$_FX_AI_PY" antigravity-request "$_FX_AGY_SESSION_DIR" "$$" \
+      "${FX_AI_TIMEOUT:-90}" "$executable" --input-format stream-json \
+      --output-format stream-json --sandbox --mode plan \
+      --disable-slash-commands ${margs[@]+"${margs[@]}"})" || rc=$?
+  (( rc == 0 )) || return "$rc"
+  printf '%s\n' "$response"
+}
+
+_fx_ai_codex() {
+  _fx_confinement_error codex
 }
 
 _fx_ai() {  # $* = intent or failed command -> prints one suggested command

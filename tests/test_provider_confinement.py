@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 COMMON = ROOT / "src" / "fixit-common.sh"
 SHELLS = [path for name in ("bash", "zsh") if (path := shutil.which(name))]
-PROVIDERS = ("opencode", "claude")
+PROVIDERS = ("opencode", "claude", "antigravity")
 COMMANDS = {
     "opencode": "_fx_ai_opencode list files",
     "claude": "_fx_ai_claude list files",
@@ -138,6 +138,12 @@ case "$name" in
 esac
 [ "$safe" -eq 1 ] || printf 'unconfined write\n' >"$FX_TEST_WRITE_MARKER"
 
+if [ "$name" = agy ]; then
+  case "$FX_TEST_ACTUAL_MODE" in
+    failure) printf 'provider failed\n' >&2; exit 17 ;;
+    timeout) printf 'provider still running\n' >&2; sleep 30 ;;
+  esac
+fi
 case "$name" in
   opencode) printf '%s\n' '{"type":"text","part":{"type":"text","text":"ls -la"}}' ;;
   claude) printf '%s\n' '{"type":"result","subtype":"success","result":"ls -la"}' ;;
