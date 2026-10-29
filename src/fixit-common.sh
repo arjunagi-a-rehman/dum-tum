@@ -10,6 +10,7 @@ else
   _FX_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 fi
 _FX_AI_PY="$_FX_DIR/fixit-ai.py"
+_FX_AGY_SESSION_DIR="${_FX_AGY_SESSION_DIR:-${TMPDIR:-/tmp}/fixit-agy.$$}"
 
 # ---------- best-match: edit distance over candidates on stdin ----------
 _fx_best() { python3 -c '
@@ -552,25 +553,18 @@ _fx_ai_claude() {  # $* = intent
 }
 
 _fx_antigravity_stop() {
-  [[ -n "${_FX_AGY_SESSION_DIR:-}" ]] || return 0
+  _FX_AGY_SESSION_DIR="${_FX_AGY_SESSION_DIR:-${TMPDIR:-/tmp}/fixit-agy.$$}"
   python3 "$_FX_AI_PY" antigravity-stop "$_FX_AGY_SESSION_DIR" >/dev/null 2>&1 || true
   unset _FX_AGY_SESSION_DIR _FX_AGY_SESSION_CONFIG
 }
 
 _fx_ai_antigravity() {  # $* = intent
-  local prompt body response rc=0 executable config margs=()
+  local prompt body response rc=0 executable margs=()
   _fx_antigravity_confinement_supported || { _fx_confinement_error antigravity; return; }
   executable="$(_fx_provider_executable agy)" || return 127
-  config="$executable"$'\n'"${FX_MODEL:-}"$'\n'"${FX_VARIANT:-}"
-  if [[ -n "${_FX_AGY_SESSION_DIR:-}" && "$config" != "${_FX_AGY_SESSION_CONFIG:-}" ]]; then
-    _fx_antigravity_stop
-  fi
-  if [[ -n "${_FX_AGY_SESSION_DIR:-}" && ! -d "$_FX_AGY_SESSION_DIR" ]]; then
-    unset _FX_AGY_SESSION_DIR _FX_AGY_SESSION_CONFIG
-  fi
-  if [[ -z "${_FX_AGY_SESSION_DIR:-}" ]]; then
-    _FX_AGY_SESSION_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fixit-agy.XXXXXX")" || return 1
-    _FX_AGY_SESSION_CONFIG="$config"
+  _FX_AGY_SESSION_DIR="${_FX_AGY_SESSION_DIR:-${TMPDIR:-/tmp}/fixit-agy.$$}"
+  if [[ ! -d "$_FX_AGY_SESSION_DIR" ]]; then
+    mkdir -m 700 "$_FX_AGY_SESSION_DIR" || return 1
   fi
   prompt="$(_fx_ai_sys_prompt)"$'\n\n'"$(_fx_ai_user_payload "$@")"
   body="$(printf '%s' "$prompt" | python3 "$_FX_AI_PY" body-antigravity)"

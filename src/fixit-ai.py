@@ -927,12 +927,14 @@ def cmd_antigravity_request(args: list) -> int:
             raise PayloadError("malformed Antigravity session response")
         sys.stdout.write(stdout)
         sys.stdout.flush()
-        sys.stderr.write(stderr)
+        sys.stderr.write(safe_terminal_text(stderr))
         sys.stderr.flush()
         return status
     except TimeoutError:
         sys.stderr.write("Antigravity request timed out\n")
         return 124
+    except KeyboardInterrupt:
+        return 130
     except (OSError, PayloadError, ValueError) as exc:
         sys.stderr.write(f"Antigravity session error: {exc}\n")
         return 1
@@ -1011,7 +1013,8 @@ def _provider_failure(provider: dict, status: int, stdout: str = "") -> dict:
     return _session_response(status, stdout, _provider_diagnostics(provider))
 
 
-def _antigravity_turn(provider: dict, body: str, timeout: float, workdir: str, owner: int) -> dict:
+def _antigravity_turn(provider: dict, body: str, timeout: float, workdir: str, owner: int,
+                      client: socket.socket = None) -> dict:
     command = provider["command"]
     if provider["process"] is None:
         try:
@@ -1029,27 +1032,51 @@ def _antigravity_turn(provider: dict, body: str, timeout: float, workdir: str, o
         request = _object(_json(body), "Antigravity request")
         if request.get("event") != "user":
             raise PayloadError("Antigravity request is not a user event")
-        process.stdin.write(body.encode("utf-8") + b"\n")
-        process.stdin.flush()
-    except (BrokenPipeError, OSError):
-        status = process.poll()
-        return _provider_failure(provider, status if status not in (None, 0) else 1)
     except PayloadError as exc:
         return _session_response(2, "", f"Antigravity request error: {exc}\n")
 
+    payload = memoryview(body.encode("utf-8") + b"\n")
     deadline = time.monotonic() + timeout
     events = []
     selector = selectors.DefaultSelector()
+    os.set_blocking(process.stdin.fileno(), False)
+    selector.register(process.stdin, selectors.EVENT_WRITE, "stdin")
     selector.register(process.stdout, selectors.EVENT_READ, "stdout")
     selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+    if client is not None:
+        selector.register(client, selectors.EVENT_READ, "client")
     try:
         while selector.get_map():
+            if not any(key.data in ("stdout", "stderr") for key in selector.get_map().values()):
+                break
             if not _owner_alive(owner):
                 raise _SupervisorSignal(signal.SIGTERM)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return _provider_failure(provider, 124)
             for key, _ in selector.select(min(1, remaining)):
+                if key.data == "client":
+                    try:
+                        disconnected = not client.recv(1, socket.MSG_PEEK)
+                    except (BlockingIOError, socket.timeout):
+                        disconnected = False
+                    except OSError:
+                        disconnected = True
+                    if disconnected:
+                        return _provider_failure(provider, 130)
+                    continue
+                if key.data == "stdin":
+                    try:
+                        written = os.write(key.fileobj.fileno(), payload)
+                    except BlockingIOError:
+                        continue
+                    except OSError:
+                        status = process.poll()
+                        return _provider_failure(provider, status if status not in (None, 0) else 1)
+                    payload = payload[written:]
+                    if not payload:
+                        selector.unregister(key.fileobj)
+                    continue
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
                     selector.unregister(key.fileobj)
@@ -1126,7 +1153,10 @@ def _antigravity_worker(session_dir: str, owner: int, idle_timeout: float) -> in
                 try:
                     request = _socket_message(connection)
                     if request.get("stop") is True:
-                        _send_socket_message(connection, _session_response(0))
+                        try:
+                            _send_socket_message(connection, _session_response(0))
+                        except OSError:
+                            pass
                         break
                     body = request.get("body")
                     command = request.get("command")
@@ -1136,16 +1166,16 @@ def _antigravity_worker(session_dir: str, owner: int, idle_timeout: float) -> in
                     if not all(isinstance(part, str) for part in command):
                         raise PayloadError("malformed Antigravity worker command")
                     if provider["command"] is not None and command != provider["command"]:
-                        raise PayloadError("Antigravity worker configuration changed")
+                        _stop_provider(provider)
                     provider["command"] = command
-                    response = _antigravity_turn(provider, body, timeout, workdir, owner)
+                    response = _antigravity_turn(provider, body, timeout, workdir, owner, connection)
                 except _SupervisorSignal:
                     raise
                 except (OSError, PayloadError, ValueError) as exc:
                     response = _session_response(2, "", f"Antigravity worker error: {exc}\n")
                 try:
                     _send_socket_message(connection, response)
-                except BrokenPipeError:
+                except OSError:
                     pass
             last_request = time.monotonic()
     except _SupervisorSignal as exc:

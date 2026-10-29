@@ -2,12 +2,17 @@ import json
 import os
 import shlex
 import shutil
+import signal
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
 from pathlib import Path
+
+from test_shell_interactive import ShellSession
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +31,9 @@ import time
 control = Path(os.environ["FX_TEST_AGY_CONTROL"])
 with open(os.environ["FX_TEST_AGY_LAUNCHES"], "a") as log:
     log.write(json.dumps({"pid": os.getpid(), "args": sys.argv[1:]}) + "\n")
+if (control / "no-read").exists():
+    print(json.dumps({"event": "init", "init": {}}), flush=True)
+    time.sleep(30)
 for index, line in enumerate(sys.stdin):
     request = json.loads(line)
     if (control / "fail").exists():
@@ -42,6 +50,11 @@ for index, line in enumerate(sys.stdin):
         time.sleep(30)
     if index == 0:
         print(json.dumps({"event": "init", "init": {}}), flush=True)
+    if (control / "diagnostics").exists():
+        print("\x1b[8mconcealed", file=sys.stderr, flush=True)
+    if (control / "slow").exists():
+        (control / "turn-started").write_text(str(os.getpid()))
+        time.sleep(30)
     response = "ls -la" if index == 0 else "pwd"
     with open(os.environ["FX_TEST_AGY_TURNS"], "a") as log:
         log.write(json.dumps({"pid": os.getpid(), "response": response}) + "\n")
@@ -88,19 +101,35 @@ class AntigravitySessionTests(unittest.TestCase):
         self.sessions.append(path)
         return path
 
-    def request(self, session, timeout="15", owner=None, env=None):
+    def request_command(self, session, timeout, owner=None):
+        return [
+            sys.executable,
+            str(HELPER),
+            "antigravity-request",
+            str(session),
+            str(owner or os.getpid()),
+            timeout,
+            str(self.agy),
+            "--sandbox",
+        ]
+
+    def start_request(self, session, timeout="15", owner=None, body=None):
+        process = subprocess.Popen(
+            self.request_command(session, timeout, owner),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.env,
+            text=True,
+        )
+        process.stdin.write(body or json.dumps({"event": "user", "message": {"content": "test"}}))
+        process.stdin.close()
+        return process
+
+    def request(self, session, timeout="15", owner=None, env=None, body=None):
         return subprocess.run(
-            [
-                sys.executable,
-                str(HELPER),
-                "antigravity-request",
-                str(session),
-                str(owner or os.getpid()),
-                timeout,
-                str(self.agy),
-                "--sandbox",
-            ],
-            input=json.dumps({"event": "user", "message": {"content": "test"}}),
+            self.request_command(session, timeout, owner),
+            input=body or json.dumps({"event": "user", "message": {"content": "test"}}),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -295,6 +324,118 @@ class AntigravitySessionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 session = Path(marker.read_text())
                 self.assertFalse(session.exists())
+
+    def test_timeout_covers_provider_stdin_writes(self):
+        session = self.session()
+        (self.control / "no-read").touch()
+        body = json.dumps({"event": "user", "message": {"content": "x" * 200000}})
+        started = time.monotonic()
+        result = self.request(session, timeout="2", body=body)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertLess(time.monotonic() - started, 8)
+        provider_pid = self.records(self.launches)[0]["pid"]
+        deadline = time.monotonic() + 2
+        while self.process_exists(provider_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(self.process_exists(provider_pid))
+        (self.control / "no-read").unlink()
+        recovered = self.request(session)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(len(self.records(self.launches)), 2)
+
+    def test_interrupt_cancels_provider_and_worker_recovers(self):
+        session = self.session()
+        (self.control / "slow").touch()
+        active = self.start_request(session)
+        marker = self.control / "turn-started"
+        try:
+            deadline = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists(), active.stderr.read() if active.poll() is not None else "")
+            provider_pid = int(marker.read_text())
+            active.send_signal(signal.SIGINT)
+            self.assertEqual(active.wait(timeout=5), 130)
+        finally:
+            if active.poll() is None:
+                active.kill()
+            active.wait()
+            active.stdout.close()
+            active.stderr.close()
+        deadline = time.monotonic() + 2
+        while self.process_exists(provider_pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(self.process_exists(provider_pid))
+        (self.control / "slow").unlink()
+        recovered = self.request(session)
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(len(self.records(self.launches)), 2)
+
+    def test_disconnected_stop_client_still_stops_worker(self):
+        session = self.session()
+        warmed_up = self.request(session)
+        self.assertEqual(warmed_up.returncode, 0, warmed_up.stderr)
+        (self.control / "slow").touch()
+        active = self.start_request(session, timeout="0.2")
+        marker = self.control / "turn-started"
+        try:
+            deadline = time.monotonic() + 5
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists())
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(str(session / "session.sock"))
+            client.sendall(b'{"stop": true}\n')
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            client.close()
+            self.assertEqual(active.wait(timeout=5), 124)
+        finally:
+            if active.poll() is None:
+                active.kill()
+            active.wait()
+            active.stdout.close()
+            active.stderr.close()
+        self.wait_for_removal(session)
+
+    def test_provider_diagnostics_are_sanitized(self):
+        session = self.session()
+        (self.control / "diagnostics").touch()
+        result = self.request(session)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("\x1b", result.stderr)
+        self.assertIn("\\x1b[8mconcealed", result.stderr)
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is not installed")
+    def test_bash_command_not_found_reuses_parent_session(self):
+        bash = shutil.which("bash")
+        version = subprocess.check_output([bash, "-c", "printf %s ${BASH_VERSINFO[0]}"], text=True)
+        if int(version) < 4:
+            self.skipTest("command_not_found_handle requires Bash 4+")
+        marker = self.control / "bash-session"
+        shell = ShellSession([bash, "--noprofile", "--norc", "-i"], self.tmpdir)
+        try:
+            shell.command(
+                f"export FX_TEST_AGY_CONTROL={shlex.quote(str(self.control))} "
+                f"FX_TEST_AGY_LAUNCHES={shlex.quote(str(self.launches))} "
+                f"FX_TEST_AGY_TURNS={shlex.quote(str(self.turns))}; "
+                f"PATH={shlex.quote(str(self.bindir))}:$PATH; export PATH; "
+                f"source {shlex.quote(str(ROOT / 'src' / 'fixit.bash'))}; "
+                "_FX_ANTIGRAVITY_CONFINEMENT_SUPPORTED=1; FX_PROVIDER=antigravity"
+            )
+            shell.command("_fx_confirm_ai_send() { return 0; }; _fx_confirm_run() { return 0; }")
+            output = shell.command("dumtumunknown first")
+            output += shell.command("dumtumunknown second")
+            shell.command(f"printf '%s' \"$_FX_AGY_SESSION_DIR\" > {shlex.quote(str(marker))}")
+            shell.command("dum_tum_unload")
+        finally:
+            shell.close()
+        launches = self.records(self.launches)
+        turns = self.records(self.turns)
+        self.assertEqual(len(launches), 1, output)
+        self.assertEqual(len(turns), 2)
+        self.assertEqual(turns[0]["pid"], turns[1]["pid"])
+        self.assertTrue(marker.read_text())
+        self.assertFalse(Path(marker.read_text()).exists())
 
 
 if __name__ == "__main__":
