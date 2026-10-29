@@ -1,0 +1,87 @@
+name: Publish npm package
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Verify and publish
+    if: ${{ github.event.release.prerelease == false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+
+      - name: Install shell test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes shellcheck zsh
+
+      - name: Show tool versions
+        run: |
+          bash --version | head -n 1
+          zsh --version
+          python3 --version
+          node --version
+          npm --version
+          shellcheck --version
+
+      - name: Verify release source and version
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor HEAD FETCH_HEAD
+          test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+
+      - name: Run Bash 5 PTY confirmation test
+        run: |
+          test "${BASH_VERSINFO[0]}" -ge 4
+          python3 -m unittest \
+            tests.test_shell_interactive.InteractiveAdapterTest.test_bash_confirmation_flow -v
+
+      - name: Run zsh PTY confirmation test
+        run: |
+          command -v zsh
+          python3 -m unittest \
+            tests.test_shell_interactive.InteractiveAdapterTest.test_zsh_confirmation_flow -v
+
+      - name: Run complete test suite
+        run: bash tests/run-tests.sh
+
+      - name: Verify npm package contents
+        run: npm pack --dry-run
+
+      - name: Publish package
+        run: npm publish --access public
+
+      - name: Verify published package
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          npm view "dum-tum@$VERSION" version dist-tags.latest gitHead dist.shasum --json

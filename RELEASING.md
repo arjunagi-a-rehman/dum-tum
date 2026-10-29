@@ -5,6 +5,18 @@ dum-tum is published in two places from the same repo:
 - **npm**: `dum-tum` — `npx dum-tum` always runs the latest published version
 - **GitHub**: tags + releases at https://github.com/arjunagi-a-rehman/dum-tum/releases
 
+## One-time npm trusted publisher setup
+
+The release workflow uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub OIDC, so no long-lived npm token is stored in the repository. After `.github/workflows/npm-publish.yml` is on `main`, open the `dum-tum` package settings on npmjs.com and add a GitHub Actions trusted publisher with:
+
+- **Organization or user**: `arjunagi-a-rehman`
+- **Repository**: `dum-tum`
+- **Workflow filename**: `npm-publish.yml`
+- **Environment name**: leave blank
+- **Allowed actions**: allow direct `npm publish`
+
+Trusted publishing automatically generates provenance attestations. Do not add an `NPM_TOKEN` or `NODE_AUTH_TOKEN` to the workflow.
+
 ## Release checklist
 
 1. Start from an up-to-date `main`, never from a feature branch:
@@ -55,13 +67,15 @@ dum-tum is published in two places from the same repo:
    test "$(git rev-list -n 1 vX.Y.Z)" = "$(git rev-parse main)"
    git push origin vX.Y.Z
    ```
-7. Publish to npm (requires `npm login`; account has 2FA — you'll be prompted to authenticate in the browser):
-   ```bash
-   npm publish --access public
-   ```
-8. Create the GitHub release with notes:
+7. Create a stable GitHub release with notes, not a prerelease:
    ```bash
    gh release create vX.Y.Z --title "vX.Y.Z — <short title>" --notes "<release notes>"
+   ```
+   Publishing the release triggers `.github/workflows/npm-publish.yml`. The workflow verifies that the tag belongs to `main` and matches the package version, reruns the release gates, and publishes through npm trusted publishing. Prereleases are skipped.
+8. Monitor the publishing workflow and investigate any failure before creating another release:
+   ```bash
+   gh run list --workflow npm-publish.yml --event release --limit 1
+   gh run watch "$(gh run list --workflow npm-publish.yml --event release --limit 1 --json databaseId --jq '.[0].databaseId')"
    ```
 9. Verify both public release targets and their commit:
    ```bash

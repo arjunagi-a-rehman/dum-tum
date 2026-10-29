@@ -20,3 +20,31 @@ class WorkflowSecurityTest(unittest.TestCase):
         guard = re.search(r"(?m)^    if:\s*(.+)$", job).group(1)
         self.assertEqual(guard, "${{ github.ref == 'refs/heads/main' }}")
         self.assertIn("  workflow_dispatch:", text)
+
+    def test_npm_publish_is_limited_to_stable_releases(self):
+        text = (ROOT / ".github/workflows/npm-publish.yml").read_text()
+        self.assertIn("  release:\n    types: [published]", text)
+        self.assertIn("    if: ${{ github.event.release.prerelease == false }}", text)
+        self.assertIn("concurrency:\n  group: npm-publish\n  cancel-in-progress: false", text)
+        self.assertNotIn("  workflow_dispatch:", text)
+
+    def test_npm_publish_uses_oidc_without_long_lived_tokens(self):
+        text = (ROOT / ".github/workflows/npm-publish.yml").read_text()
+        self.assertIn("      id-token: write", text)
+        self.assertIn("          node-version: 24.x", text)
+        self.assertNotIn("NPM_TOKEN", text)
+        self.assertNotIn("NODE_AUTH_TOKEN", text)
+        self.assertIn("        run: npm publish --access public", text)
+
+    def test_npm_publish_verifies_release_source_and_version(self):
+        text = (ROOT / ".github/workflows/npm-publish.yml").read_text()
+        version_check = '          test "$GITHUB_REF_NAME" = "v$(node -p "require(\'./package.json\').version")"'
+        self.assertIn("          ref: ${{ github.event.release.tag_name }}", text)
+        self.assertIn("          git merge-base --is-ancestor HEAD FETCH_HEAD", text)
+        self.assertIn(version_check, text)
+        publish = text.index("        run: npm publish --access public")
+        self.assertLess(text.index("          git fetch origin main"), publish)
+        self.assertLess(text.index("          git merge-base --is-ancestor HEAD FETCH_HEAD"), publish)
+        self.assertLess(text.index(version_check), publish)
+        self.assertLess(text.index("        run: bash tests/run-tests.sh"), publish)
+        self.assertLess(text.index("        run: npm pack --dry-run"), publish)
