@@ -69,15 +69,22 @@ Trusted publishing automatically generates provenance attestations. Do not add a
    test "$(git rev-list -n 1 vX.Y.Z)" = "$(git rev-parse main)"
    git push origin vX.Y.Z
    ```
-7. Create a stable GitHub release with notes, not a prerelease:
+7. Create a stable GitHub release with notes, not a prerelease. Require the tag pushed in the previous step so a missing or mistyped tag cannot select an unverified commit:
    ```bash
-   gh release create vX.Y.Z --title "vX.Y.Z — <short title>" --notes "<release notes>"
+   gh release create vX.Y.Z --verify-tag --title "vX.Y.Z — <short title>" --notes "<release notes>"
    ```
    Publishing the release triggers `.github/workflows/npm-publish.yml`. The workflow verifies that the tag belongs to `main` and matches the package version, reruns the release gates, and publishes through npm trusted publishing. Prereleases are skipped.
-8. Monitor the publishing workflow and investigate any failure before creating another release:
+8. Wait for the workflow run tied to the release commit, then monitor it. The bounded loop allows the release event to appear without accidentally selecting an older run:
    ```bash
-   gh run list --workflow npm-publish.yml --event release --limit 1
-   gh run watch "$(gh run list --workflow npm-publish.yml --event release --limit 1 --json databaseId --jq '.[0].databaseId')"
+   RELEASE_SHA="$(git rev-list -n 1 vX.Y.Z)"
+   RUN_ID=""
+   for _ in {1..30}; do
+     RUN_ID="$(gh run list --workflow npm-publish.yml --event release --commit "$RELEASE_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+     [ -n "$RUN_ID" ] && break
+     sleep 10
+   done
+   test -n "$RUN_ID"
+   gh run watch --exit-status "$RUN_ID"
    ```
 9. Verify both public release targets and their commit:
    ```bash

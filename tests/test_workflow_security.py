@@ -57,3 +57,11 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertIn('fetch("https://registry.npmjs.org/dum-tum")', text)
         self.assertIn("response.status !== 404", text)
         self.assertIn("compare(candidate, parse(latest)) <= 0", text)
+
+    def test_release_instructions_verify_tag_and_watch_current_run(self):
+        text = (ROOT / "RELEASING.md").read_text()
+        self.assertIn("gh release create vX.Y.Z --verify-tag", text)
+        self.assertIn('RELEASE_SHA="$(git rev-list -n 1 vX.Y.Z)"', text)
+        self.assertIn('--event release --commit "$RELEASE_SHA"', text)
+        self.assertIn("for _ in {1..30}; do", text)
+        self.assertIn('gh run watch --exit-status "$RUN_ID"', text)
