@@ -117,4 +117,14 @@ jobs:
       - name: Verify published package
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          npm view "dum-tum@$VERSION" version dist-tags.latest gitHead dist.shasum --json
+          DEADLINE=$((SECONDS + 120))
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            REMAINING=$((DEADLINE - SECONDS))
+            if timeout "${REMAINING}s" npm view "dum-tum@$VERSION" version dist-tags.latest gitHead dist.shasum --json; then
+              exit 0
+            fi
+            if [ "$REMAINING" -gt 10 ]; then
+              sleep 10
+            fi
+          done
+          exit 1
