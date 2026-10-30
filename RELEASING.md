@@ -5,6 +5,20 @@ dum-tum is published in two places from the same repo:
 - **npm**: `dum-tum` — `npx dum-tum` always runs the latest published version
 - **GitHub**: tags + releases at https://github.com/arjunagi-a-rehman/dum-tum/releases
 
+## npm trusted publisher setup
+
+The release workflow uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub OIDC, so no long-lived npm token is stored in the repository. After `.github/workflows/npm-publish.yml` is on `main`, open the `dum-tum` package settings on npmjs.com and add a GitHub Actions trusted publisher with:
+
+- **Organization or user**: `arjunagi-a-rehman`
+- **Repository**: `dum-tum`
+- **Workflow filename**: `npm-publish.yml`
+- **Environment name**: leave blank
+- **Allowed actions**: allow direct `npm publish`
+
+A newly created configuration must complete its first successful publish within 2 days. Configure it immediately before the next release; if it expires before that publish, remove the expired configuration and recreate it.
+
+Trusted publishing automatically generates provenance attestations. Do not add an `NPM_TOKEN` or `NODE_AUTH_TOKEN` to the workflow.
+
 ## Release checklist
 
 1. Start from an up-to-date `main`, never from a feature branch:
@@ -55,13 +69,22 @@ dum-tum is published in two places from the same repo:
    test "$(git rev-list -n 1 vX.Y.Z)" = "$(git rev-parse main)"
    git push origin vX.Y.Z
    ```
-7. Publish to npm (requires `npm login`; account has 2FA — you'll be prompted to authenticate in the browser):
+7. Create a stable GitHub release with notes, not a prerelease. Require the tag pushed in the previous step so a missing or mistyped tag cannot select an unverified commit:
    ```bash
-   npm publish --access public
+   gh release create vX.Y.Z --verify-tag --title "vX.Y.Z — <short title>" --notes "<release notes>"
    ```
-8. Create the GitHub release with notes:
+   Publishing the release triggers `.github/workflows/npm-publish.yml`. The workflow verifies that the tag belongs to `main` and matches the package version, reruns the release gates, and publishes through npm trusted publishing. Prereleases are skipped.
+8. Wait for the workflow run tied to the release commit and exact tag, then monitor it. The bounded loop allows the release event to appear without selecting an older run or a prerelease run that shares the commit:
    ```bash
-   gh release create vX.Y.Z --title "vX.Y.Z — <short title>" --notes "<release notes>"
+   RELEASE_SHA="$(git rev-list -n 1 vX.Y.Z)"
+   RUN_ID=""
+   for _ in {1..30}; do
+     RUN_ID="$(gh run list --workflow npm-publish.yml --event release --commit "$RELEASE_SHA" --limit 20 --json databaseId,headBranch --jq '.[] | select(.headBranch == "vX.Y.Z") | .databaseId' | head -n 1)"
+     [ -n "$RUN_ID" ] && break
+     sleep 10
+   done
+   test -n "$RUN_ID"
+   gh run watch --exit-status "$RUN_ID"
    ```
 9. Verify both public release targets and their commit:
    ```bash

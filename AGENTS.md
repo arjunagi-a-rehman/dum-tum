@@ -27,7 +27,7 @@ Must end with "All tests passed" (44 tests + shellcheck). shellcheck must be cle
 
 ## Releasing
 
-See [RELEASING.md](RELEASING.md). Short version: bump `package.json` version → tag `vX.Y.Z` → `npm publish --access public` (user runs this; npm account has 2FA, needs browser auth) → `gh release create`.
+See [RELEASING.md](RELEASING.md). Short version: bump `package.json` version → tag `vX.Y.Z` → `gh release create`. Publishing a stable release triggers `.github/workflows/npm-publish.yml`, which verifies and publishes the package through npm trusted publishing.
 
 Key facts:
 - `npx dum-tum` = npm release (latest dist-tag). `npx github:...` = main HEAD, not a release.
