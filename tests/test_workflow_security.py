@@ -67,3 +67,13 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertIn('select(.headBranch == "vX.Y.Z")', text)
         self.assertIn("for _ in {1..30}; do", text)
         self.assertIn('gh run watch --exit-status "$RUN_ID"', text)
+
+    def test_npm_publish_verification_retries_until_visible(self):
+        text = (ROOT / ".github/workflows/npm-publish.yml").read_text()
+        verify = text.split("      - name: Verify published package\n", 1)[1]
+        self.assertIn("for attempt in {1..12}; do", verify)
+        self.assertIn('if npm view "dum-tum@$VERSION" version dist-tags.latest gitHead dist.shasum --json; then', verify)
+        self.assertIn("exit 0", verify)
+        self.assertIn('if [ "$attempt" -lt 12 ]; then', verify)
+        self.assertIn("sleep 10", verify)
+        self.assertIn("exit 1", verify)

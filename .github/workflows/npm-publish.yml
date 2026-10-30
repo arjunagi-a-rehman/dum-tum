@@ -117,4 +117,12 @@ jobs:
       - name: Verify published package
         run: |
           VERSION="$(node -p "require('./package.json').version")"
-          npm view "dum-tum@$VERSION" version dist-tags.latest gitHead dist.shasum --json
+          for attempt in {1..12}; do
+            if npm view "dum-tum@$VERSION" version dist-tags.latest gitHead dist.shasum --json; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 12 ]; then
+              sleep 10
+            fi
+          done
+          exit 1
