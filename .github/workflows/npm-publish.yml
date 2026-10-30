@@ -60,6 +60,39 @@ jobs:
           git merge-base --is-ancestor HEAD FETCH_HEAD
           test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
 
+      - name: Verify version advances npm latest
+        run: |
+          node - "$(node -p "require('./package.json').version")" <<'NODE'
+          const version = process.argv[2];
+          const parse = (value) => {
+            const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
+            if (!match) throw new Error(`Expected a stable semantic version, received: ${value}`);
+            return match.slice(1).map(Number);
+          };
+          const compare = (left, right) => {
+            for (let index = 0; index < 3; index += 1) {
+              if (left[index] !== right[index]) return left[index] - right[index];
+            }
+            return 0;
+          };
+          const main = async () => {
+            const candidate = parse(version);
+            const response = await fetch("https://registry.npmjs.org/dum-tum");
+            if (!response.ok && response.status !== 404) {
+              throw new Error(`npm metadata request failed: ${response.status}`);
+            }
+            const metadata = response.ok ? await response.json() : {};
+            const latest = metadata["dist-tags"]?.latest;
+            if (latest && compare(candidate, parse(latest)) <= 0) {
+              throw new Error(`Version ${version} must be higher than npm latest ${latest}`);
+            }
+          };
+          main().catch((error) => {
+            console.error(error.message);
+            process.exitCode = 1;
+          });
+          NODE
+
       - name: Run Bash 5 PTY confirmation test
         run: |
           test "${BASH_VERSINFO[0]}" -ge 4

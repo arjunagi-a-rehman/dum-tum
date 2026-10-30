@@ -5,7 +5,7 @@ dum-tum is published in two places from the same repo:
 - **npm**: `dum-tum` — `npx dum-tum` always runs the latest published version
 - **GitHub**: tags + releases at https://github.com/arjunagi-a-rehman/dum-tum/releases
 
-## One-time npm trusted publisher setup
+## npm trusted publisher setup
 
 The release workflow uses [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) with GitHub OIDC, so no long-lived npm token is stored in the repository. After `.github/workflows/npm-publish.yml` is on `main`, open the `dum-tum` package settings on npmjs.com and add a GitHub Actions trusted publisher with:
 
@@ -14,6 +14,8 @@ The release workflow uses [npm trusted publishing](https://docs.npmjs.com/truste
 - **Workflow filename**: `npm-publish.yml`
 - **Environment name**: leave blank
 - **Allowed actions**: allow direct `npm publish`
+
+A newly created configuration must complete its first successful publish within 2 days. Configure it immediately before the next release; if it expires before that publish, remove the expired configuration and recreate it.
 
 Trusted publishing automatically generates provenance attestations. Do not add an `NPM_TOKEN` or `NODE_AUTH_TOKEN` to the workflow.
 

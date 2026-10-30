@@ -48,3 +48,12 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertLess(text.index(version_check), publish)
         self.assertLess(text.index("        run: bash tests/run-tests.sh"), publish)
         self.assertLess(text.index("        run: npm pack --dry-run"), publish)
+
+    def test_npm_publish_does_not_move_latest_backward(self):
+        text = (ROOT / ".github/workflows/npm-publish.yml").read_text()
+        guard = text.index("      - name: Verify version advances npm latest")
+        publish = text.index("        run: npm publish --access public")
+        self.assertLess(guard, publish)
+        self.assertIn('fetch("https://registry.npmjs.org/dum-tum")', text)
+        self.assertIn("response.status !== 404", text)
+        self.assertIn("compare(candidate, parse(latest)) <= 0", text)
