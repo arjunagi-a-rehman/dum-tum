@@ -63,5 +63,7 @@ class WorkflowSecurityTest(unittest.TestCase):
         self.assertIn("gh release create vX.Y.Z --verify-tag", text)
         self.assertIn('RELEASE_SHA="$(git rev-list -n 1 vX.Y.Z)"', text)
         self.assertIn('--event release --commit "$RELEASE_SHA"', text)
+        self.assertIn("--json databaseId,headBranch", text)
+        self.assertIn('select(.headBranch == "vX.Y.Z")', text)
         self.assertIn("for _ in {1..30}; do", text)
         self.assertIn('gh run watch --exit-status "$RUN_ID"', text)

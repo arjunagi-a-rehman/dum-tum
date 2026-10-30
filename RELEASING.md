@@ -74,12 +74,12 @@ Trusted publishing automatically generates provenance attestations. Do not add a
    gh release create vX.Y.Z --verify-tag --title "vX.Y.Z — <short title>" --notes "<release notes>"
    ```
    Publishing the release triggers `.github/workflows/npm-publish.yml`. The workflow verifies that the tag belongs to `main` and matches the package version, reruns the release gates, and publishes through npm trusted publishing. Prereleases are skipped.
-8. Wait for the workflow run tied to the release commit, then monitor it. The bounded loop allows the release event to appear without accidentally selecting an older run:
+8. Wait for the workflow run tied to the release commit and exact tag, then monitor it. The bounded loop allows the release event to appear without selecting an older run or a prerelease run that shares the commit:
    ```bash
    RELEASE_SHA="$(git rev-list -n 1 vX.Y.Z)"
    RUN_ID=""
    for _ in {1..30}; do
-     RUN_ID="$(gh run list --workflow npm-publish.yml --event release --commit "$RELEASE_SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+     RUN_ID="$(gh run list --workflow npm-publish.yml --event release --commit "$RELEASE_SHA" --limit 20 --json databaseId,headBranch --jq '.[] | select(.headBranch == "vX.Y.Z") | .databaseId' | head -n 1)"
      [ -n "$RUN_ID" ] && break
      sleep 10
    done
